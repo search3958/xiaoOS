@@ -748,6 +748,35 @@ int xiao_video_fill_rgb888(xiao_env *env, unsigned int rgb888) {
     return -1;
 }
 
+int xiao_video_draw_pixel_rgb888(xiao_env *env, int x, int y, unsigned int rgb888) {
+    if (env && env->hal && env->hal->video_draw_pixel_rgb888) {
+        return env->hal->video_draw_pixel_rgb888(x, y, rgb888);
+    }
+    return -1;
+}
+
+int xiao_video_fill_rect_rgb888(xiao_env *env, int x, int y, int w, int h, unsigned int rgb888) {
+    int iy;
+    int ix;
+    if (env && env->hal && env->hal->video_fill_rect_rgb888) {
+        return env->hal->video_fill_rect_rgb888(x, y, w, h, rgb888);
+    }
+    if (w <= 0 || h <= 0) return -1;
+    for (iy = 0; iy < h; iy++) {
+        for (ix = 0; ix < w; ix++) {
+            if (xiao_video_draw_pixel_rgb888(env, x + ix, y + iy, rgb888) != 0) return -1;
+        }
+    }
+    return 0;
+}
+
+int xiao_video_size(xiao_env *env, int *w, int *h) {
+    if (env && env->hal && env->hal->video_size) {
+        return env->hal->video_size(w, h);
+    }
+    return -1;
+}
+
 int xiao_platform(xiao_env *env) {
     if (env && env->hal) return env->hal->platform;
     return XIAO_PLATFORM_UNKNOWN;
@@ -766,6 +795,7 @@ int xiao_app_date(xiao_env *env);
 int xiao_app_df(xiao_env *env);
 int xiao_app_find(xiao_env *env);
 int xiao_app_free(xiao_env *env);
+int xiao_app_grap(xiao_env *env);
 int xiao_app_grep(xiao_env *env);
 int xiao_app_head(xiao_env *env);
 int xiao_app_hello(xiao_env *env);
@@ -1919,6 +1949,7 @@ static const xiao_app app_table[] = {
     { "df", xiao_app_df },
     { "find", xiao_app_find },
     { "free", xiao_app_free },
+    { "grap", xiao_app_grap },
     { "grep", xiao_app_grep },
     { "head", xiao_app_head },
     { "hello", xiao_app_hello },
@@ -2224,6 +2255,99 @@ int xiao_app_free(xiao_env *env) {
     xiao_app_free__print_uint(env, info.rom_used);
     xiao_console_print(env, "\r\n");
     return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/grap.c"
+#include "xiao.h"
+
+static int xiao_app_grap__streq(const char *a, const char *b) {
+    while (*a && *b && *a == *b) { a++; b++; }
+    return *a == 0 && *b == 0;
+}
+
+static int xiao_app_grap__parse_int(const char *s, int *out) {
+    int sign = 1;
+    int v = 0;
+    if (!s || !*s || !out) return -1;
+    if (*s == '-') { sign = -1; s++; }
+    if (!*s) return -1;
+    while (*s) {
+        if (*s < '0' || *s > '9') return -1;
+        v = v * 10 + (*s - '0');
+        s++;
+    }
+    *out = sign * v;
+    return 0;
+}
+
+static int xiao_app_grap__hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+static int xiao_app_grap__parse_color(const char *s, unsigned int *out) {
+    int i;
+    unsigned int v = 0;
+    if (!s || !out) return -1;
+    if (s[0] == '#') s++;
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+    for (i = 0; i < 6; i++) {
+        int n = xiao_app_grap__hex_nibble(s[i]);
+        if (n < 0) return -1;
+        v = (v << 4) | (unsigned int)n;
+    }
+    if (s[6] != 0) return -1;
+    *out = v;
+    return 0;
+}
+
+int xiao_app_grap(xiao_env *env) {
+    int x, y, w, h;
+    unsigned int c;
+
+    if (xiao_argc(env) < 2) {
+        xiao_console_print(env, "usage: grap drawpixel X Y COLOR\r\n");
+        xiao_console_print(env, "   or: grap drawrect X Y W H COLOR\r\n");
+        return 1;
+    }
+
+    if (xiao_app_grap__streq(xiao_argv(env, 1), "drawpixel")) {
+        if (xiao_argc(env) != 5 ||
+            xiao_app_grap__parse_int(xiao_argv(env, 2), &x) != 0 ||
+            xiao_app_grap__parse_int(xiao_argv(env, 3), &y) != 0 ||
+            xiao_app_grap__parse_color(xiao_argv(env, 4), &c) != 0) {
+            xiao_console_print(env, "usage: grap drawpixel X Y COLOR\r\n");
+            return 1;
+        }
+        if (xiao_video_draw_pixel_rgb888(env, x, y, c) != 0) {
+            xiao_console_print(env, "grap: drawpixel failed\r\n");
+            return 1;
+        }
+        return 0;
+    }
+
+    if (xiao_app_grap__streq(xiao_argv(env, 1), "drawrect")) {
+        if (xiao_argc(env) != 7 ||
+            xiao_app_grap__parse_int(xiao_argv(env, 2), &x) != 0 ||
+            xiao_app_grap__parse_int(xiao_argv(env, 3), &y) != 0 ||
+            xiao_app_grap__parse_int(xiao_argv(env, 4), &w) != 0 ||
+            xiao_app_grap__parse_int(xiao_argv(env, 5), &h) != 0 ||
+            xiao_app_grap__parse_color(xiao_argv(env, 6), &c) != 0) {
+            xiao_console_print(env, "usage: grap drawrect X Y W H COLOR\r\n");
+            return 1;
+        }
+        if (xiao_video_fill_rect_rgb888(env, x, y, w, h, c) != 0) {
+            xiao_console_print(env, "grap: drawrect failed\r\n");
+            return 1;
+        }
+        return 0;
+    }
+
+    xiao_console_print(env, "grap: unknown command\r\n");
+    return 1;
 }
 
 
@@ -2641,19 +2765,27 @@ int xiao_app_pwd(xiao_env *env) {
 #include "xiao.h"
 
 int xiao_app_red(xiao_env *env) {
-    const char *name = "unknown";
-    int platform = xiao_platform(env);
-
-    if (platform == XIAO_PLATFORM_PC) name = "pc";
-    else if (platform == XIAO_PLATFORM_ESP32) name = "esp32";
-
-    xiao_console_print(env, "red: platform=");
-    xiao_console_print(env, name);
-    xiao_console_print(env, " color=#a00\r\n");
+    int sw = 0;
+    int sh = 0;
+    int step;
+    int total_steps = 80;
 
     if (xiao_video_fill_rgb888(env, 0xAA0000u) != 0) {
         xiao_console_print(env, "red: video fill is not supported on this target\r\n");
         return 1;
+    }
+    if (xiao_video_size(env, &sw, &sh) != 0) {
+        xiao_console_print(env, "red: video size is not available\r\n");
+        return 1;
+    }
+
+    for (step = 1; step <= total_steps; step++) {
+        int size = step;
+        int x = sw / 2 - size / 2;
+        int y = sh / 2 - size / 2;
+        xiao_video_fill_rgb888(env, 0xAA0000u);
+        xiao_video_fill_rect_rgb888(env, x, y, size, size, 0xFFDDADu);
+        xiao_wait(env, 25);
     }
     return 0;
 }

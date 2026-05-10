@@ -38,6 +38,9 @@ typedef struct {
     void (*wait_ms)(xiao_tick ms);
     void (*yield)(void);
     int (*video_fill_rgb888)(unsigned int rgb888);
+    int (*video_draw_pixel_rgb888)(int x, int y, unsigned int rgb888);
+    int (*video_fill_rect_rgb888)(int x, int y, int w, int h, unsigned int rgb888);
+    int (*video_size)(int *w, int *h);
     int platform;
 } xiao_hal;
 
@@ -98,6 +101,9 @@ void xiao_fs_info_read(xiao_fs_info *info);
 void xiao_wait(xiao_env *env, xiao_tick ms);
 void xiao_yield(xiao_env *env);
 int xiao_video_fill_rgb888(xiao_env *env, unsigned int rgb888);
+int xiao_video_draw_pixel_rgb888(xiao_env *env, int x, int y, unsigned int rgb888);
+int xiao_video_fill_rect_rgb888(xiao_env *env, int x, int y, int w, int h, unsigned int rgb888);
+int xiao_video_size(xiao_env *env, int *w, int *h);
 int xiao_platform(xiao_env *env);
 
 extern const xiao_boot_image xiao_image;

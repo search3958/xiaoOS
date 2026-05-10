@@ -744,6 +744,35 @@ int xiao_video_fill_rgb888(xiao_env *env, unsigned int rgb888) {
     return -1;
 }
 
+int xiao_video_draw_pixel_rgb888(xiao_env *env, int x, int y, unsigned int rgb888) {
+    if (env && env->hal && env->hal->video_draw_pixel_rgb888) {
+        return env->hal->video_draw_pixel_rgb888(x, y, rgb888);
+    }
+    return -1;
+}
+
+int xiao_video_fill_rect_rgb888(xiao_env *env, int x, int y, int w, int h, unsigned int rgb888) {
+    int iy;
+    int ix;
+    if (env && env->hal && env->hal->video_fill_rect_rgb888) {
+        return env->hal->video_fill_rect_rgb888(x, y, w, h, rgb888);
+    }
+    if (w <= 0 || h <= 0) return -1;
+    for (iy = 0; iy < h; iy++) {
+        for (ix = 0; ix < w; ix++) {
+            if (xiao_video_draw_pixel_rgb888(env, x + ix, y + iy, rgb888) != 0) return -1;
+        }
+    }
+    return 0;
+}
+
+int xiao_video_size(xiao_env *env, int *w, int *h) {
+    if (env && env->hal && env->hal->video_size) {
+        return env->hal->video_size(w, h);
+    }
+    return -1;
+}
+
 int xiao_platform(xiao_env *env) {
     if (env && env->hal) return env->hal->platform;
     return XIAO_PLATFORM_UNKNOWN;

@@ -14,6 +14,7 @@ u8 uefi_inb(u16 port);
 static EFI_SYSTEM_TABLE *st;
 static int esc_state;
 static EFI_GRAPHICS_OUTPUT_PROTOCOL *gop;
+static int gop_mode_ready;
 
 static const EFI_GUID gop_guid = {
     0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}
@@ -166,6 +167,16 @@ static void uefi_enter_best_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop) {
     ggop->SetMode(ggop, best_mode);
 }
 
+static int uefi_prepare_gop(void) {
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop = uefi_get_gop();
+    if (!ggop || !ggop->Mode || !ggop->Mode->Info) return -1;
+    if (!gop_mode_ready) {
+        uefi_enter_best_graphics_mode(ggop);
+        gop_mode_ready = 1;
+    }
+    return 0;
+}
+
 static UINT32 uefi_masked_component(UINT32 v8, UINT32 mask) {
     UINT32 m = mask;
     UINT32 shift = 0;
@@ -183,23 +194,12 @@ static UINT32 uefi_masked_component(UINT32 v8, UINT32 mask) {
     return (((v8 * ((1u << bits) - 1u)) / 255u) << shift) & mask;
 }
 
-static int uefi_video_fill_rgb888(unsigned int rgb888) {
-    EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop = uefi_get_gop();
-    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode;
-    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
-    volatile UINT32 *fb;
-    UINT32 x, y;
+static int uefi_color_from_rgb888(EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info, unsigned int rgb888, UINT32 *out) {
     UINT32 color = 0;
     u8 r = (u8)((rgb888 >> 16) & 0xff);
     u8 g = (u8)((rgb888 >> 8) & 0xff);
     u8 b = (u8)(rgb888 & 0xff);
-
-    if (!ggop || !ggop->Mode || !ggop->Mode->Info) return -1;
-    uefi_enter_best_graphics_mode(ggop);
-    mode = ggop->Mode;
-    info = mode->Info;
-    fb = (volatile UINT32 *)(UINTN)mode->FrameBufferBase;
-    if (!fb) return -1;
+    if (!info || !out) return -1;
 
     if (info->PixelFormat == PixelRedGreenBlueReserved8BitPerColor) {
         color = ((UINT32)b << 16) | ((UINT32)g << 8) | (UINT32)r;
@@ -212,14 +212,68 @@ static int uefi_video_fill_rgb888(unsigned int rgb888) {
     } else {
         return -1;
     }
+    *out = color;
+    return 0;
+}
 
-    for (y = 0; y < info->VerticalResolution; y++) {
-        UINTN row = (UINTN)y * (UINTN)info->PixelsPerScanLine;
-        for (x = 0; x < info->HorizontalResolution; x++) {
-            fb[row + x] = color;
+static int uefi_video_size(int *w, int *h) {
+    if (!w || !h || uefi_prepare_gop() != 0) return -1;
+    *w = (int)gop->Mode->Info->HorizontalResolution;
+    *h = (int)gop->Mode->Info->VerticalResolution;
+    return 0;
+}
+
+static int uefi_video_draw_pixel_rgb888(int x, int y, unsigned int rgb888) {
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
+    volatile UINT32 *fb;
+    UINT32 color;
+    if (uefi_prepare_gop() != 0) return -1;
+    mode = gop->Mode;
+    info = mode->Info;
+    if (x < 0 || y < 0 || x >= (int)info->HorizontalResolution || y >= (int)info->VerticalResolution) return -1;
+    if (uefi_color_from_rgb888(info, rgb888, &color) != 0) return -1;
+    fb = (volatile UINT32 *)(UINTN)mode->FrameBufferBase;
+    if (!fb) return -1;
+    fb[(UINTN)y * (UINTN)info->PixelsPerScanLine + (UINTN)x] = color;
+    return 0;
+}
+
+static int uefi_video_fill_rect_rgb888(int x, int y, int w, int h, unsigned int rgb888) {
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
+    volatile UINT32 *fb;
+    UINT32 color;
+    int x0, y0, x1, y1;
+    int yy, xx;
+    if (w <= 0 || h <= 0) return -1;
+    if (uefi_prepare_gop() != 0) return -1;
+    mode = gop->Mode;
+    info = mode->Info;
+    if (uefi_color_from_rgb888(info, rgb888, &color) != 0) return -1;
+    fb = (volatile UINT32 *)(UINTN)mode->FrameBufferBase;
+    if (!fb) return -1;
+    x0 = x < 0 ? 0 : x;
+    y0 = y < 0 ? 0 : y;
+    x1 = x + w;
+    y1 = y + h;
+    if (x1 > (int)info->HorizontalResolution) x1 = (int)info->HorizontalResolution;
+    if (y1 > (int)info->VerticalResolution) y1 = (int)info->VerticalResolution;
+    if (x0 >= x1 || y0 >= y1) return -1;
+
+    for (yy = y0; yy < y1; yy++) {
+        UINTN row = (UINTN)yy * (UINTN)info->PixelsPerScanLine;
+        for (xx = x0; xx < x1; xx++) {
+            fb[row + (UINTN)xx] = color;
         }
     }
     return 0;
+}
+
+static int uefi_video_fill_rgb888(unsigned int rgb888) {
+    int w, h;
+    if (uefi_video_size(&w, &h) != 0) return -1;
+    return uefi_video_fill_rect_rgb888(0, 0, w, h, rgb888);
 }
 
 static const xiao_hal uefi_hal = {
@@ -229,6 +283,9 @@ static const xiao_hal uefi_hal = {
     uefi_wait_ms,
     uefi_yield,
     uefi_video_fill_rgb888,
+    uefi_video_draw_pixel_rgb888,
+    uefi_video_fill_rect_rgb888,
+    uefi_video_size,
     XIAO_PLATFORM_PC,
 };
 

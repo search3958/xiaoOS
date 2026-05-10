@@ -280,6 +280,58 @@ static int esp32c3_video_fill_rgb888(unsigned int rgb888) {
     return 0;
 }
 
+static int esp32c3_video_draw_pixel_rgb888(int x, int y, unsigned int rgb888) {
+    uint8_t r = (uint8_t)((rgb888 >> 16) & 0xff);
+    uint8_t g = (uint8_t)((rgb888 >> 8) & 0xff);
+    uint8_t b = (uint8_t)(rgb888 & 0xff);
+    uint16_t c565 = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+    if (x < 0 || y < 0 || x >= 240 || y >= 240) return -1;
+    gc9a01_init();
+    gc9a01_set_window((uint16_t)x, (uint16_t)y, (uint16_t)x, (uint16_t)y);
+    gc9a01_write_data16(c565);
+    return 0;
+}
+
+static int esp32c3_video_fill_rect_rgb888(int x, int y, int w, int h, unsigned int rgb888) {
+    uint8_t r = (uint8_t)((rgb888 >> 16) & 0xff);
+    uint8_t g = (uint8_t)((rgb888 >> 8) & 0xff);
+    uint8_t b = (uint8_t)(rgb888 & 0xff);
+    uint16_t c565 = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+    uint8_t hi = (uint8_t)(c565 >> 8);
+    uint8_t lo = (uint8_t)(c565 & 0xff);
+    int x0, y0, x1, y1;
+    int pixels;
+    int i;
+    if (w <= 0 || h <= 0) return -1;
+    x0 = x < 0 ? 0 : x;
+    y0 = y < 0 ? 0 : y;
+    x1 = x + w;
+    y1 = y + h;
+    if (x1 > 240) x1 = 240;
+    if (y1 > 240) y1 = 240;
+    if (x0 >= x1 || y0 >= y1) return -1;
+    gc9a01_init();
+    gc9a01_set_window((uint16_t)x0, (uint16_t)y0, (uint16_t)(x1 - 1), (uint16_t)(y1 - 1));
+    pixels = (x1 - x0) * (y1 - y0);
+    gc9a01_spi.beginTransaction(SPISettings(XIAO_GC9A01_SPI_HZ, MSBFIRST, SPI_MODE0));
+    digitalWrite(XIAO_GC9A01_PIN_CS, LOW);
+    digitalWrite(XIAO_GC9A01_PIN_DC, HIGH);
+    for (i = 0; i < pixels; i++) {
+        gc9a01_spi.transfer(hi);
+        gc9a01_spi.transfer(lo);
+    }
+    digitalWrite(XIAO_GC9A01_PIN_CS, HIGH);
+    gc9a01_spi.endTransaction();
+    return 0;
+}
+
+static int esp32c3_video_size(int *w, int *h) {
+    if (!w || !h) return -1;
+    *w = 240;
+    *h = 240;
+    return 0;
+}
+
 static const xiao_hal esp32c3_hal = {
     esp32c3_serial_write,
     esp32c3_serial_write,
@@ -287,6 +339,9 @@ static const xiao_hal esp32c3_hal = {
     esp32c3_wait_ms,
     esp32c3_yield,
     esp32c3_video_fill_rgb888,
+    esp32c3_video_draw_pixel_rgb888,
+    esp32c3_video_fill_rect_rgb888,
+    esp32c3_video_size,
     XIAO_PLATFORM_ESP32,
 };
 

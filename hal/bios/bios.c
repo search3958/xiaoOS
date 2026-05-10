@@ -136,19 +136,49 @@ static void bios_yield(void) {
     __asm__ __volatile__("pause");
 }
 
-static int bios_video_fill_rgb888(unsigned int rgb888) {
+static u8 bios_color_bg(unsigned int rgb888) {
     u8 r = (u8)((rgb888 >> 16) & 0xff);
     u8 g = (u8)((rgb888 >> 8) & 0xff);
     u8 b = (u8)(rgb888 & 0xff);
     u8 bg = 0;
-    u32 i;
-
     if (r >= 96) bg |= 0x4;
     if (g >= 96) bg |= 0x2;
     if (b >= 96) bg |= 0x1;
+    return bg;
+}
+
+static int bios_video_draw_pixel_rgb888(int x, int y, unsigned int rgb888) {
+    u8 bg;
+    if (x < 0 || y < 0 || x >= VGA_W || y >= VGA_H) return -1;
+    bg = bios_color_bg(rgb888);
+    vga[y * VGA_W + x] = (u16)(((u16)bg << 12) | 0x0020);
+    return 0;
+}
+
+static int bios_video_fill_rect_rgb888(int x, int y, int w, int h, unsigned int rgb888) {
+    int xx, yy;
+    if (w <= 0 || h <= 0) return -1;
+    for (yy = 0; yy < h; yy++) {
+        for (xx = 0; xx < w; xx++) {
+            bios_video_draw_pixel_rgb888(x + xx, y + yy, rgb888);
+        }
+    }
+    return 0;
+}
+
+static int bios_video_fill_rgb888(unsigned int rgb888) {
+    u32 i;
+    u8 bg = bios_color_bg(rgb888);
     for (i = 0; i < VGA_W * VGA_H; i++) vga[i] = (u16)(((u16)bg << 12) | 0x0020);
     row = 0;
     col = 0;
+    return 0;
+}
+
+static int bios_video_size(int *w, int *h) {
+    if (!w || !h) return -1;
+    *w = VGA_W;
+    *h = VGA_H;
     return 0;
 }
 
@@ -159,6 +189,9 @@ static const xiao_hal bios_hal = {
     bios_wait_ms,
     bios_yield,
     bios_video_fill_rgb888,
+    bios_video_draw_pixel_rgb888,
+    bios_video_fill_rect_rgb888,
+    bios_video_size,
     XIAO_PLATFORM_PC,
 };
 

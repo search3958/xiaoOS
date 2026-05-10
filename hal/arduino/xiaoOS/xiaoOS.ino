@@ -29,6 +29,9 @@ static const xiao_hal arduino_hal = {
     arduino_wait_ms,
     arduino_yield,
     0,
+    0,
+    0,
+    0,
     XIAO_PLATFORM_UNKNOWN,
 };
 

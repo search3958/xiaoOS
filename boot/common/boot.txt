@@ -3,4 +3,5 @@ exec hello
 wait 100
 exec serial_hello
 exec nihao
+exec xuexi
 wait forever

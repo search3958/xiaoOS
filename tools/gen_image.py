@@ -54,9 +54,29 @@ def app_sources(apps_dir, ignore_path):
     return sorted(sources)
 
 
+def file_sources(files_dir, ignore_path):
+    root = Path(files_dir)
+    rules = load_ignore(ignore_path)
+    sources = []
+    if not root.exists():
+        return sources
+    for path in root.rglob("*"):
+        if path.is_file():
+            rel = path.relative_to(root).as_posix()
+            if rel == Path(ignore_path).name:
+                continue
+            if not ignored(rel, rules):
+                sources.append(path.as_posix())
+    return sorted(sources)
+
+
 def app_name(src, apps_dir):
     rel = Path(src).relative_to(apps_dir).with_suffix("").as_posix()
     return rel
+
+
+def file_name(src, files_dir):
+    return Path(src).relative_to(files_dir).as_posix()
 
 
 def symbol_for(name):
@@ -83,7 +103,9 @@ def write_boot_text(out, boot_text):
 
 def generate(args):
     apps_dir = Path(args.apps_dir)
+    files_dir = Path(args.files_dir)
     sources = app_sources(apps_dir, args.ignore)
+    files = file_sources(files_dir, args.files_ignore)
     boot_text = Path(args.boot).read_text()
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,15 +118,31 @@ def generate(args):
             out.write(f"int {symbol_for(name)}(xiao_env *env);\n")
         out.write("\n")
         write_boot_text(out, boot_text)
+        for index, src in enumerate(files):
+            data = Path(src).read_bytes()
+            out.write(f"static const char file_{index}[] = {{\n    ")
+            for i, byte in enumerate(data):
+                if i and i % 18 == 0:
+                    out.write("\n    ")
+                out.write(f"{byte}, ")
+            out.write("0\n};\n\n")
         out.write("static const xiao_app app_table[] = {\n")
         for src in sources:
             name = app_name(src, apps_dir)
             out.write(f'    {{ "{c_escape(name)}", {symbol_for(name)} }},\n')
         out.write("};\n\n")
+        out.write("static const xiao_file file_table[] = {\n")
+        for index, src in enumerate(files):
+            name = file_name(src, files_dir)
+            size = len(Path(src).read_bytes())
+            out.write(f'    {{ "{c_escape(name)}", file_{index}, {size} }},\n')
+        out.write("};\n\n")
         out.write("const xiao_boot_image xiao_image = {\n")
         out.write("    boot_text,\n")
         out.write("    app_table,\n")
         out.write("    sizeof(app_table) / sizeof(app_table[0]),\n")
+        out.write("    file_table,\n")
+        out.write("    sizeof(file_table) / sizeof(file_table[0]),\n")
         out.write("};\n")
 
 
@@ -112,9 +150,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--apps-dir", default="apps")
     parser.add_argument("--ignore", default="apps/.xiaoignore")
+    parser.add_argument("--files-dir", default="files")
+    parser.add_argument("--files-ignore", default="files/.xiaoignore")
     parser.add_argument("--boot")
     parser.add_argument("--out")
     parser.add_argument("--list-sources", action="store_true")
+    parser.add_argument("--list-files", action="store_true")
     parser.add_argument("--symbol-for")
     args = parser.parse_args()
 
@@ -124,6 +165,10 @@ def main():
 
     if args.list_sources:
         print(" ".join(app_sources(args.apps_dir, args.ignore)))
+        return
+
+    if args.list_files:
+        print(" ".join(file_sources(args.files_dir, args.files_ignore)))
         return
 
     if not args.boot or not args.out:

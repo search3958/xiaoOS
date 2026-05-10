@@ -5,6 +5,8 @@ extern "C" {
 #include "xiao.h"
 
 #define XIAO_MAX_TASKS 8
+#define XIAO_MAX_ARGS 8
+#define XIAO_MAX_LINE 128
 
 typedef struct {
     const xiao_app *app;
@@ -13,6 +15,7 @@ typedef struct {
 
 static xiao_task tasks[XIAO_MAX_TASKS];
 static xiao_env current_env;
+static const xiao_boot_image *current_image;
 
 static xiao_size xiao_strlen(const char *s) {
     xiao_size n = 0;
@@ -55,8 +58,24 @@ static const xiao_app *xiao_find_app(const xiao_boot_image *image, const char *n
     return 0;
 }
 
+static void xiao_run_app_args(const xiao_app *app, int argc, const char **argv) {
+    const char *saved_app_name = current_env.app_name;
+    xiao_ipc_message saved_ipc = current_env.ipc;
+    if (!app || !app->main) return;
+    current_env.app_name = app->name;
+    current_env.ipc.from = saved_app_name ? saved_app_name : "kernel";
+    current_env.ipc.argc = argc;
+    current_env.ipc.argv = argv;
+    app->main(&current_env);
+    current_env.app_name = saved_app_name;
+    current_env.ipc = saved_ipc;
+}
+
 static void xiao_run_app(const xiao_app *app) {
-    if (app && app->main) app->main(&current_env);
+    const char *argv[1];
+    if (!app) return;
+    argv[0] = app->name;
+    xiao_run_app_args(app, 1, argv);
 }
 
 static void xiao_spawn(const xiao_app *app) {
@@ -86,10 +105,21 @@ static void xiao_skip_line(const char **p) {
     if (**p == '\n') (*p)++;
 }
 
+static void xiao_copy_line(char *dst, xiao_size cap, const char **src) {
+    xiao_size n = 0;
+    while (**src == ' ' || **src == '\t') (*src)++;
+    while (**src && **src != '\r' && **src != '\n') {
+        if (n + 1 < cap) dst[n++] = **src;
+        (*src)++;
+    }
+    dst[n] = 0;
+}
+
 static void xiao_run_boot_text(const xiao_boot_image *image) {
     const char *p = image->boot_text;
     char cmd[16];
     char arg[48];
+    char line[XIAO_MAX_LINE];
     while (p && *p) {
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
         if (*p == 0) break;
@@ -98,12 +128,14 @@ static void xiao_run_boot_text(const xiao_boot_image *image) {
             continue;
         }
         xiao_copy_word(cmd, sizeof(cmd), &p);
-        xiao_copy_word(arg, sizeof(arg), &p);
         if (xiao_streq(cmd, "exec")) {
-            xiao_run_app(xiao_find_app(image, arg));
+            xiao_copy_line(line, sizeof(line), &p);
+            xiao_exec_line(line);
         } else if (xiao_streq(cmd, "spawn")) {
+            xiao_copy_word(arg, sizeof(arg), &p);
             xiao_spawn(xiao_find_app(image, arg));
         } else if (xiao_streq(cmd, "wait")) {
+            xiao_copy_word(arg, sizeof(arg), &p);
             if (xiao_streq(arg, "forever")) {
                 while (1) {
                     xiao_drain_tasks();
@@ -120,6 +152,11 @@ static void xiao_run_boot_text(const xiao_boot_image *image) {
 void xiao_start(const xiao_hal *hal, const xiao_boot_image *image) {
     xiao_size i;
     current_env.hal = hal;
+    current_env.app_name = 0;
+    current_env.ipc.from = "kernel";
+    current_env.ipc.argc = 0;
+    current_env.ipc.argv = 0;
+    current_image = image;
     for (i = 0; i < XIAO_MAX_TASKS; i++) tasks[i].active = 0;
     if (image) xiao_run_boot_text(image);
     while (1) xiao_wait(&current_env, 1000);
@@ -132,9 +169,97 @@ void xiao_serial_print(xiao_env *env, const char *text) {
 }
 
 void xiao_console_print(xiao_env *env, const char *text) {
+    xiao_console_write(env, text, xiao_strlen(text));
+}
+
+void xiao_console_write(xiao_env *env, const char *data, xiao_size len) {
     if (env && env->hal && env->hal->console_write) {
-        env->hal->console_write(text, xiao_strlen(text));
+        env->hal->console_write(data, len);
     }
+}
+
+int xiao_input_read(xiao_env *env) {
+    if (env && env->hal && env->hal->input_read) return env->hal->input_read();
+    return -1;
+}
+
+int xiao_exec_app(const char *name) {
+    const char *argv[1];
+    if (!name) return -1;
+    argv[0] = name;
+    return xiao_exec_app_args(name, 1, argv);
+}
+
+int xiao_exec_app_args(const char *name, int argc, const char **argv) {
+    const xiao_app *app;
+    if (!current_image || !name) return -1;
+    app = xiao_find_app(current_image, name);
+    if (!app) return -1;
+    xiao_run_app_args(app, argc, argv);
+    return 0;
+}
+
+int xiao_exec_line(const char *line) {
+    static char copy[XIAO_MAX_LINE];
+    static const char *argv[XIAO_MAX_ARGS];
+    xiao_size i = 0;
+    int argc = 0;
+    if (!line) return -1;
+    while (line[i] && i + 1 < sizeof(copy)) {
+        copy[i] = line[i];
+        i++;
+    }
+    copy[i] = 0;
+    i = 0;
+    while (copy[i] && argc < XIAO_MAX_ARGS) {
+        while (copy[i] == ' ' || copy[i] == '\t') i++;
+        if (!copy[i]) break;
+        argv[argc++] = &copy[i];
+        while (copy[i] && copy[i] != ' ' && copy[i] != '\t') i++;
+        if (copy[i]) copy[i++] = 0;
+    }
+    if (argc == 0) return 0;
+    return xiao_exec_app_args(argv[0], argc, argv);
+}
+
+int xiao_argc(xiao_env *env) {
+    return env ? env->ipc.argc : 0;
+}
+
+const char *xiao_argv(xiao_env *env, int index) {
+    if (!env || index < 0 || index >= env->ipc.argc || !env->ipc.argv) return 0;
+    return env->ipc.argv[index];
+}
+
+xiao_size xiao_app_count(void) {
+    return current_image ? current_image->app_count : 0;
+}
+
+const char *xiao_app_name(xiao_size index) {
+    if (!current_image || index >= current_image->app_count) return 0;
+    return current_image->apps[index].name;
+}
+
+xiao_size xiao_file_count(void) {
+    return current_image ? current_image->file_count : 0;
+}
+
+const char *xiao_file_name(xiao_size index) {
+    if (!current_image || index >= current_image->file_count) return 0;
+    return current_image->files[index].name;
+}
+
+int xiao_file_read(const char *name, const char **data, xiao_size *size) {
+    xiao_size i;
+    if (!current_image || !name) return -1;
+    for (i = 0; i < current_image->file_count; i++) {
+        if (xiao_streq(current_image->files[i].name, name)) {
+            if (data) *data = current_image->files[i].data;
+            if (size) *size = current_image->files[i].size;
+            return 0;
+        }
+    }
+    return -1;
 }
 
 void xiao_wait(xiao_env *env, xiao_tick ms) {
@@ -150,30 +275,152 @@ void xiao_yield(xiao_env *env) {
 /* generated by tools/sync_sketch.py; edit boot/common/boot.txt or apps/ */
 #include "xiao.h"
 
+int xiao_app_cat(xiao_env *env);
+int xiao_app_grep(xiao_env *env);
 int xiao_app_hello(xiao_env *env);
-int xiao_app_nihao(xiao_env *env);
+int xiao_app_ls(xiao_env *env);
+int xiao_app_sed(xiao_env *env);
 int xiao_app_serial_hello(xiao_env *env);
+int xiao_app_terminal(xiao_env *env);
+int xiao_app_xuexi(xiao_env *env);
 
 static const char boot_text[] =
     "# xiaoOS boot text\n"
     "exec hello\n"
     "wait 100\n"
-    "exec serial_hello\n"
+    "exec terminal\n"
     "exec nihao\n"
+    "exec xuexi\n"
     "wait forever\n"
     ;
 
+static const char file_0[] = {
+    104, 101, 108, 108, 111, 32, 102, 114, 111, 109, 32, 120, 105, 97, 111, 70, 83, 10, 
+    104, 101, 108, 108, 111, 32, 102, 114, 111, 109, 32, 97, 110, 32, 97, 112, 112, 45, 
+    114, 101, 97, 100, 97, 98, 108, 101, 32, 102, 105, 108, 101, 10, 0
+};
+
+static const char file_1[] = {
+    120, 105, 97, 111, 79, 83, 32, 101, 109, 98, 101, 100, 100, 101, 100, 32, 102, 105, 
+    108, 101, 32, 115, 121, 115, 116, 101, 109, 10, 10, 84, 104, 105, 115, 32, 116, 101, 
+    120, 116, 32, 105, 115, 32, 99, 111, 109, 112, 105, 108, 101, 100, 32, 105, 110, 116, 
+    111, 32, 116, 104, 101, 32, 79, 83, 32, 105, 109, 97, 103, 101, 46, 10, 84, 114, 
+    121, 58, 10, 108, 115, 10, 99, 97, 116, 32, 114, 101, 97, 100, 109, 101, 46, 116, 
+    120, 116, 10, 103, 114, 101, 112, 32, 120, 105, 97, 111, 32, 114, 101, 97, 100, 109, 
+    101, 46, 116, 120, 116, 10, 115, 101, 100, 32, 115, 47, 120, 105, 97, 111, 47, 88, 
+    73, 65, 79, 47, 32, 114, 101, 97, 100, 109, 101, 46, 116, 120, 116, 10, 0
+};
+
 static const xiao_app app_table[] = {
+    { "cat", xiao_app_cat },
+    { "grep", xiao_app_grep },
     { "hello", xiao_app_hello },
-    { "nihao", xiao_app_nihao },
+    { "ls", xiao_app_ls },
+    { "sed", xiao_app_sed },
     { "serial_hello", xiao_app_serial_hello },
+    { "terminal", xiao_app_terminal },
+    { "xuexi", xiao_app_xuexi },
+};
+
+static const xiao_file file_table[] = {
+    { "hello.txt", file_0, 50 },
+    { "readme.txt", file_1, 142 },
 };
 
 const xiao_boot_image xiao_image = {
     boot_text,
     app_table,
     sizeof(app_table) / sizeof(app_table[0]),
+    file_table,
+    sizeof(file_table) / sizeof(file_table[0]),
 };
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/cat.c"
+#include "xiao.h"
+
+static void xiao_app_cat__usage(xiao_env *env) {
+    xiao_console_print(env, "usage: cat FILE...\r\n");
+}
+
+int xiao_app_cat(xiao_env *env) {
+    int i;
+    if (xiao_argc(env) < 2) {
+        xiao_app_cat__usage(env);
+        return 1;
+    }
+
+    for (i = 1; i < xiao_argc(env); i++) {
+        const char *data = 0;
+        xiao_size size = 0;
+        const char *name = xiao_argv(env, i);
+        if (xiao_file_read(name, &data, &size) != 0) {
+            xiao_console_print(env, "cat: not found: ");
+            xiao_console_print(env, name);
+            xiao_console_print(env, "\r\n");
+            continue;
+        }
+        xiao_console_write(env, data, size);
+        if (size == 0 || data[size - 1] != '\n') xiao_console_print(env, "\r\n");
+    }
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/grep.c"
+#include "xiao.h"
+
+static int xiao_app_grep__contains(const char *data, xiao_size len, const char *needle) {
+    xiao_size i;
+    xiao_size j;
+    if (!needle || !needle[0]) return 1;
+    for (i = 0; i < len; i++) {
+        for (j = 0; needle[j] && i + j < len && data[i + j] == needle[j]; j++) {}
+        if (!needle[j]) return 1;
+    }
+    return 0;
+}
+
+static void xiao_app_grep__grep_file(xiao_env *env, const char *pattern, const char *name, int print_name) {
+    const char *data = 0;
+    xiao_size size = 0;
+    xiao_size start = 0;
+    xiao_size i;
+    if (xiao_file_read(name, &data, &size) != 0) {
+        xiao_console_print(env, "grep: not found: ");
+        xiao_console_print(env, name);
+        xiao_console_print(env, "\r\n");
+        return;
+    }
+    for (i = 0; i <= size; i++) {
+        if (i == size || data[i] == '\n') {
+            xiao_size len = i - start;
+            if (xiao_app_grep__contains(data + start, len, pattern)) {
+                if (print_name) {
+                    xiao_console_print(env, name);
+                    xiao_console_print(env, ":");
+                }
+                xiao_console_write(env, data + start, len);
+                xiao_console_print(env, "\r\n");
+            }
+            start = i + 1;
+        }
+    }
+}
+
+int xiao_app_grep(xiao_env *env) {
+    int i;
+    int print_name;
+    if (xiao_argc(env) < 3) {
+        xiao_console_print(env, "usage: grep PATTERN FILE...\r\n");
+        return 1;
+    }
+    print_name = xiao_argc(env) > 3;
+    for (i = 2; i < xiao_argc(env); i++) {
+        xiao_app_grep__grep_file(env, xiao_argv(env, 1), xiao_argv(env, i), print_name);
+    }
+    return 0;
+}
+
 
 #line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/hello.c"
 #include "xiao.h"
@@ -184,11 +431,118 @@ int xiao_app_hello(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/nihao.c"
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/ls.c"
 #include "xiao.h"
 
-int xiao_app_nihao(xiao_env *env) {
-    xiao_serial_print(env, "NI HAO MA! WO SHI XIAO!\r\n");
+int xiao_app_ls(xiao_env *env) {
+    xiao_size i;
+    int show_apps = 0;
+    if (xiao_argc(env) > 1 && xiao_argv(env, 1)[0] == '-' && xiao_argv(env, 1)[1] == 'a') {
+        show_apps = 1;
+    }
+
+    if (show_apps) {
+        for (i = 0; i < xiao_app_count(); i++) {
+            xiao_console_print(env, xiao_app_name(i));
+            xiao_console_print(env, "\r\n");
+        }
+        return 0;
+    }
+
+    for (i = 0; i < xiao_file_count(); i++) {
+        xiao_console_print(env, xiao_file_name(i));
+        xiao_console_print(env, "\r\n");
+    }
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/sed.c"
+#include "xiao.h"
+
+static xiao_size xiao_app_sed__strlen_local(const char *s) {
+    xiao_size n = 0;
+    while (s && s[n]) n++;
+    return n;
+}
+
+static int xiao_app_sed__starts_with(const char *data, xiao_size remaining, const char *needle, xiao_size needle_len) {
+    xiao_size i;
+    if (needle_len > remaining) return 0;
+    for (i = 0; i < needle_len; i++) {
+        if (data[i] != needle[i]) return 0;
+    }
+    return 1;
+}
+
+static int xiao_app_sed__parse_subst(char *expr, const char **old_text, const char **new_text) {
+    char delim;
+    char *p;
+    if (!expr || expr[0] != 's' || !expr[1]) return -1;
+    delim = expr[1];
+    *old_text = expr + 2;
+    p = expr + 2;
+    while (*p && *p != delim) p++;
+    if (!*p) return -1;
+    *p++ = 0;
+    *new_text = p;
+    while (*p && *p != delim) p++;
+    if (*p) *p = 0;
+    return 0;
+}
+
+static void xiao_app_sed__sed_file(xiao_env *env, const char *old_text, const char *new_text, const char *name) {
+    const char *data = 0;
+    xiao_size size = 0;
+    xiao_size old_len = xiao_app_sed__strlen_local(old_text);
+    xiao_size new_len = xiao_app_sed__strlen_local(new_text);
+    xiao_size i = 0;
+    if (xiao_file_read(name, &data, &size) != 0) {
+        xiao_console_print(env, "sed: not found: ");
+        xiao_console_print(env, name);
+        xiao_console_print(env, "\r\n");
+        return;
+    }
+    if (old_len == 0) {
+        xiao_console_write(env, data, size);
+        return;
+    }
+    while (i < size) {
+        if (xiao_app_sed__starts_with(data + i, size - i, old_text, old_len)) {
+            xiao_console_write(env, new_text, new_len);
+            i += old_len;
+        } else {
+            xiao_console_write(env, data + i, 1);
+            i++;
+        }
+    }
+}
+
+int xiao_app_sed(xiao_env *env) {
+    char expr[64];
+    const char *old_text = 0;
+    const char *new_text = 0;
+    const char *arg;
+    xiao_size i = 0;
+    int f;
+    if (xiao_argc(env) < 3) {
+        xiao_console_print(env, "usage: sed s/OLD/NEW/ FILE...\r\n");
+        return 1;
+    }
+    arg = xiao_argv(env, 1);
+    while (arg[i] && i + 1 < sizeof(expr)) {
+        expr[i] = arg[i];
+        i++;
+    }
+    expr[i] = 0;
+    if (xiao_app_sed__parse_subst(expr, &old_text, &new_text) != 0) {
+        xiao_console_print(env, "sed: only s/OLD/NEW/ is supported\r\n");
+        return 1;
+    }
+    for (f = 2; f < xiao_argc(env); f++) {
+        xiao_app_sed__sed_file(env, old_text, new_text, xiao_argv(env, f));
+        xiao_console_print(env, "\r\n");
+    }
     return 0;
 }
 
@@ -198,6 +552,80 @@ int xiao_app_nihao(xiao_env *env) {
 
 int xiao_app_serial_hello(xiao_env *env) {
     xiao_serial_print(env, "hello world from xiaoOS serial app\r\n");
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/terminal.c"
+#include "xiao.h"
+
+static int xiao_app_terminal__xiao_streq_local(const char *a, const char *b) {
+    while (*a && *b && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == 0 && *b == 0;
+}
+
+int xiao_app_terminal(xiao_env *env) {
+    char line[128];
+    xiao_size n = 0;
+
+    xiao_console_print(env, "xiao terminal ready\r\n");
+    xiao_console_print(env, "type command (example: ls, cat readme.txt), or 'exit'\r\n");
+
+    while (1) {
+        int ch;
+        xiao_console_print(env, "> ");
+        n = 0;
+
+        while (1) {
+            ch = xiao_input_read(env);
+            if (ch < 0) {
+                xiao_wait(env, 10);
+                continue;
+            }
+            if (ch == '\r' || ch == '\n') {
+                xiao_console_print(env, "\r\n");
+                break;
+            }
+            if ((ch == 0x08 || ch == 0x7f) && n > 0) {
+                n--;
+                xiao_console_print(env, "\\b \\b");
+                continue;
+            }
+            if (ch >= 32 && ch <= 126 && n + 1 < sizeof(line)) {
+                line[n++] = (char)ch;
+                {
+                    char out[2];
+                    out[0] = (char)ch;
+                    out[1] = 0;
+                    xiao_console_print(env, out);
+                }
+            }
+        }
+
+        line[n] = 0;
+        if (n == 0) continue;
+        if (xiao_app_terminal__xiao_streq_local(line, "exit")) break;
+
+        if (xiao_exec_line(line) != 0) {
+            xiao_console_print(env, "command failed: ");
+            xiao_console_print(env, line);
+            xiao_console_print(env, "\r\n");
+        }
+    }
+
+    xiao_console_print(env, "terminal closed\r\n");
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/xuexi.c"
+#include "xiao.h"
+
+int xiao_app_xuexi(xiao_env *env) {
+    xiao_serial_print(env, "Hello, World.\r\nXIEXI GUANGGUO WASUI WANWANSUI\r\n");
     return 0;
 }
 

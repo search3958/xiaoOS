@@ -10,6 +10,22 @@ OS本体は `boot.txt` 起動テキストを読み，`exec` / `spawn` / `wait` �
 アプリはCで書かれ，ターゲットごとにネイティブオブジェクトとしてリンクされます。
 現在はESP32-C3,S3,x86-BIOS,x86_64-UEFI,AArch64-UEFIで動作を確認しています。
 
+## IPCと引数
+terminalは入力された1行を `xiao_exec_line()` で起動メッセージに変換します。
+起動されたアプリは `env->ipc` または `xiao_argc()` / `xiao_argv()` で引数を受け取ります。
+つまり `grep hello readme.txt` は，terminalからgrepアプリへ `argv = ["grep", "hello", "readme.txt"]` を送るIPCとして扱われます。
+
+## ファイルと基本コマンド
+`files/` の中身はビルド時に埋め込みファイルシステムとしてOSイメージに入ります。
+除外したいファイルは `files/.xiaoignore` に書きます。
+
+現在の基本コマンド:
+- `ls`: 埋め込みファイル一覧
+- `ls -a`: app一覧
+- `cat FILE...`
+- `grep PATTERN FILE...`
+- `sed s/OLD/NEW/ FILE...`
+
 ## 対応ターゲット
 - Arduino Uno: `hal/arduino/xiaoOS/xiaoOS.ino`
 - ESP32-C3: `hal/esp32c3/xiaoOS/xiaoOS.ino`

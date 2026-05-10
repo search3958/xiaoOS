@@ -1,11 +1,5 @@
 #include "xiao.h"
 
-static xiao_size xiao_strlen_local(const char *s) {
-    xiao_size n = 0;
-    while (s && s[n]) n++;
-    return n;
-}
-
 static int xiao_streq_local(const char *a, const char *b) {
     while (*a && *b && *a == *b) {
         a++;
@@ -15,11 +9,11 @@ static int xiao_streq_local(const char *a, const char *b) {
 }
 
 int xiao_app_entry(xiao_env *env) {
-    char line[64];
+    char line[128];
     xiao_size n = 0;
 
     xiao_console_print(env, "xiao terminal ready\r\n");
-    xiao_console_print(env, "type app name (example: hello), or 'exit'\r\n");
+    xiao_console_print(env, "type command (example: ls, cat readme.txt), or 'exit'\r\n");
 
     while (1) {
         int ch;
@@ -38,7 +32,7 @@ int xiao_app_entry(xiao_env *env) {
             }
             if ((ch == 0x08 || ch == 0x7f) && n > 0) {
                 n--;
-                xiao_console_print(env, "\\b \\b");
+                xiao_console_print(env, "\b \b");
                 continue;
             }
             if (ch >= 32 && ch <= 126 && n + 1 < sizeof(line)) {
@@ -56,13 +50,13 @@ int xiao_app_entry(xiao_env *env) {
         if (n == 0) continue;
         if (xiao_streq_local(line, "exit")) break;
 
-        if (xiao_exec_app(line) != 0) {
-            xiao_console_print(env, "app not found: ");
+        if (xiao_exec_line(line) != 0) {
+            xiao_console_print(env, "command failed: ");
             xiao_console_print(env, line);
             xiao_console_print(env, "\r\n");
         }
     }
 
     xiao_console_print(env, "terminal closed\r\n");
-    return (int)xiao_strlen_local(line);
+    return 0;
 }

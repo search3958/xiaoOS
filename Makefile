@@ -10,6 +10,7 @@ STAGE2_SECTORS := 32
 STAGE2_SIZE := 16384
 
 APP_SRCS := $(shell $(PYTHON) tools/gen_image.py --apps-dir apps --ignore apps/.xiaoignore --list-sources)
+FILE_SRCS := $(shell $(PYTHON) tools/gen_image.py --files-dir files --files-ignore files/.xiaoignore --list-files)
 BIOS_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/bios/apps/%.o,$(APP_SRCS))
 UEFI_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/uefi/apps/%.obj,$(APP_SRCS))
 ARM64_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/arm64/apps/%.obj,$(APP_SRCS))
@@ -38,8 +39,8 @@ arm64: $(BUILD)/arm64/BOOTAA64.EFI $(BUILD)/arm64/esp/EFI/BOOT/BOOTAA64.EFI
 $(BUILD)/bios $(BUILD)/uefi $(BUILD)/uefi/esp/EFI/BOOT $(BUILD)/arm64 $(BUILD)/arm64/esp/EFI/BOOT $(BUILD)/generated:
 	mkdir -p $@
 
-$(BUILD)/generated/image.c: boot/common/boot.txt tools/gen_image.py apps/.xiaoignore $(APP_SRCS) | $(BUILD)/generated
-	$(PYTHON) tools/gen_image.py --boot boot/common/boot.txt --apps-dir apps --ignore apps/.xiaoignore --out $@
+$(BUILD)/generated/image.c: boot/common/boot.txt tools/gen_image.py apps/.xiaoignore files/.xiaoignore $(APP_SRCS) $(FILE_SRCS) | $(BUILD)/generated
+	$(PYTHON) tools/gen_image.py --boot boot/common/boot.txt --apps-dir apps --ignore apps/.xiaoignore --files-dir files --files-ignore files/.xiaoignore --out $@
 
 $(BUILD)/generated/apps/%.c: apps/%.c tools/wrap_app.py tools/gen_image.py | $(BUILD)/generated
 	mkdir -p $(@D)

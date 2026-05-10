@@ -51,6 +51,7 @@ static void uefi_serial_write(const char *data, xiao_size len) {
 #ifdef XIAO_UEFI_X86_SERIAL
     xiao_size i;
     for (i = 0; i < len; i++) serial_putc(data[i]);
+    uefi_console_write(data, len);
 #else
     uefi_console_write(data, len);
 #endif

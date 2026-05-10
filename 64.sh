@@ -29,7 +29,6 @@ exec qemu-system-x86_64 \
     -machine q35 \
     -drive if=pflash,format=raw,readonly=on,file="$code" \
     -drive if=ide,file=fat:rw:build/uefi/esp,format=raw \
-    -serial stdio \
+    -serial vc \
     -monitor none \
-    -display none \
     -no-reboot

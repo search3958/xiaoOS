@@ -29,11 +29,11 @@ exec qemu-system-aarch64 \
     -M virt \
     -cpu cortex-a72 \
     -m 512M \
+    -device ramfb \
     -bios "$code" \
     -drive if=none,id=hd0,file=fat:rw:build/arm64/esp,format=raw \
     -device virtio-blk-device,drive=hd0 \
     -net none \
-    -serial stdio \
+    -serial vc \
     -monitor none \
-    -display none \
     -no-reboot

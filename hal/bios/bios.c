@@ -12,6 +12,8 @@ static u16 *const vga = (u16 *)0xb8000;
 static u32 row;
 static u32 col;
 
+static void console_putc(char c);
+
 static void outb(u16 port, u8 value) {
     __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
 }
@@ -39,7 +41,10 @@ static void serial_putc(char c) {
 
 static void bios_serial_write(const char *data, xiao_size len) {
     xiao_size i;
-    for (i = 0; i < len; i++) serial_putc(data[i]);
+    for (i = 0; i < len; i++) {
+        serial_putc(data[i]);
+        console_putc(data[i]);
+    }
 }
 
 static void scroll_if_needed(void) {

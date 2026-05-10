@@ -38,6 +38,7 @@ require_arduino_cli() {
 }
 
 require_arduino_cli
+python3 tools/sync_sketch.py hal/esp32c3/xiaoOS
 
 case "$ACTION" in
     compile)

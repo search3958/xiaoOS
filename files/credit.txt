@@ -1,0 +1,3 @@
+GC9A01 initialization command sequence in hal/esp32c3/xiaoOS/xiaoOS.ino
+is adapted from Espressif's esp_lcd_gc9a01 component (Apache-2.0):
+https://components.espressif.com/components/espressif/esp_lcd_gc9a01

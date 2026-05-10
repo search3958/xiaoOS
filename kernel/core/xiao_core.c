@@ -736,3 +736,15 @@ void xiao_wait(xiao_env *env, xiao_tick ms) {
 void xiao_yield(xiao_env *env) {
     if (env && env->hal && env->hal->yield) env->hal->yield();
 }
+
+int xiao_video_fill_rgb888(xiao_env *env, unsigned int rgb888) {
+    if (env && env->hal && env->hal->video_fill_rgb888) {
+        return env->hal->video_fill_rgb888(rgb888);
+    }
+    return -1;
+}
+
+int xiao_platform(xiao_env *env) {
+    if (env && env->hal) return env->hal->platform;
+    return XIAO_PLATFORM_UNKNOWN;
+}

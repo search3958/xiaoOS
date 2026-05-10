@@ -16,6 +16,10 @@ typedef struct {
 #define XIAO_FS_FILE 1
 #define XIAO_FS_DIR 2
 
+#define XIAO_PLATFORM_UNKNOWN 0
+#define XIAO_PLATFORM_PC 1
+#define XIAO_PLATFORM_ESP32 2
+
 typedef struct {
     const char *name;
     xiao_app_main main;
@@ -33,6 +37,8 @@ typedef struct {
     int (*input_read)(void);
     void (*wait_ms)(xiao_tick ms);
     void (*yield)(void);
+    int (*video_fill_rgb888)(unsigned int rgb888);
+    int platform;
 } xiao_hal;
 
 struct xiao_env {
@@ -91,6 +97,8 @@ int xiao_fs_copy(const char *src_path, const char *dst_path);
 void xiao_fs_info_read(xiao_fs_info *info);
 void xiao_wait(xiao_env *env, xiao_tick ms);
 void xiao_yield(xiao_env *env);
+int xiao_video_fill_rgb888(xiao_env *env, unsigned int rgb888);
+int xiao_platform(xiao_env *env);
 
 extern const xiao_boot_image xiao_image;
 

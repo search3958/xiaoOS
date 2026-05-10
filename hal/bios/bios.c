@@ -136,12 +136,30 @@ static void bios_yield(void) {
     __asm__ __volatile__("pause");
 }
 
+static int bios_video_fill_rgb888(unsigned int rgb888) {
+    u8 r = (u8)((rgb888 >> 16) & 0xff);
+    u8 g = (u8)((rgb888 >> 8) & 0xff);
+    u8 b = (u8)(rgb888 & 0xff);
+    u8 bg = 0;
+    u32 i;
+
+    if (r >= 96) bg |= 0x4;
+    if (g >= 96) bg |= 0x2;
+    if (b >= 96) bg |= 0x1;
+    for (i = 0; i < VGA_W * VGA_H; i++) vga[i] = (u16)(((u16)bg << 12) | 0x0020);
+    row = 0;
+    col = 0;
+    return 0;
+}
+
 static const xiao_hal bios_hal = {
     bios_serial_write,
     bios_console_write,
     bios_input_read,
     bios_wait_ms,
     bios_yield,
+    bios_video_fill_rgb888,
+    XIAO_PLATFORM_PC,
 };
 
 void xiao_bios_main(void) {

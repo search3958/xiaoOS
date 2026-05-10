@@ -13,6 +13,11 @@ u8 uefi_inb(u16 port);
 
 static EFI_SYSTEM_TABLE *st;
 static int esc_state;
+static EFI_GRAPHICS_OUTPUT_PROTOCOL *gop;
+
+static const EFI_GUID gop_guid = {
+    0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}
+};
 
 typedef struct {
     u16 ScanCode;
@@ -129,12 +134,102 @@ static void uefi_wait_ms(xiao_tick ms) {
 static void uefi_yield(void) {
 }
 
+static EFI_GRAPHICS_OUTPUT_PROTOCOL *uefi_get_gop(void) {
+    if (gop) return gop;
+    if (!st || !st->BootServices || !st->BootServices->LocateProtocol) return 0;
+    if (st->BootServices->LocateProtocol((EFI_GUID *)&gop_guid, 0, (void **)&gop) != EFI_SUCCESS) return 0;
+    return gop;
+}
+
+static void uefi_enter_best_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop) {
+    UINT32 i;
+    UINT32 best_mode;
+    UINT32 best_pixels;
+    if (!ggop || !ggop->Mode || !ggop->QueryMode || !ggop->SetMode) return;
+
+    best_mode = ggop->Mode->Mode;
+    best_pixels = 0;
+    for (i = 0; i < ggop->Mode->MaxMode; i++) {
+        UINTN info_size = 0;
+        EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = 0;
+        if (ggop->QueryMode(ggop, i, &info_size, &info) == EFI_SUCCESS && info) {
+            UINT32 pixels = info->HorizontalResolution * info->VerticalResolution;
+            if (pixels > best_pixels) {
+                best_pixels = pixels;
+                best_mode = i;
+            }
+            if (st && st->BootServices && st->BootServices->FreePool) {
+                st->BootServices->FreePool(info);
+            }
+        }
+    }
+    ggop->SetMode(ggop, best_mode);
+}
+
+static UINT32 uefi_masked_component(UINT32 v8, UINT32 mask) {
+    UINT32 m = mask;
+    UINT32 shift = 0;
+    UINT32 bits = 0;
+    while ((m & 1u) == 0u) {
+        shift++;
+        m >>= 1;
+        if (m == 0) return 0;
+    }
+    while ((m & 1u) == 1u) {
+        bits++;
+        m >>= 1;
+    }
+    if (bits == 0) return 0;
+    return (((v8 * ((1u << bits) - 1u)) / 255u) << shift) & mask;
+}
+
+static int uefi_video_fill_rgb888(unsigned int rgb888) {
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop = uefi_get_gop();
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
+    volatile UINT32 *fb;
+    UINT32 x, y;
+    UINT32 color = 0;
+    u8 r = (u8)((rgb888 >> 16) & 0xff);
+    u8 g = (u8)((rgb888 >> 8) & 0xff);
+    u8 b = (u8)(rgb888 & 0xff);
+
+    if (!ggop || !ggop->Mode || !ggop->Mode->Info) return -1;
+    uefi_enter_best_graphics_mode(ggop);
+    mode = ggop->Mode;
+    info = mode->Info;
+    fb = (volatile UINT32 *)(UINTN)mode->FrameBufferBase;
+    if (!fb) return -1;
+
+    if (info->PixelFormat == PixelRedGreenBlueReserved8BitPerColor) {
+        color = ((UINT32)b << 16) | ((UINT32)g << 8) | (UINT32)r;
+    } else if (info->PixelFormat == PixelBlueGreenRedReserved8BitPerColor) {
+        color = ((UINT32)r << 16) | ((UINT32)g << 8) | (UINT32)b;
+    } else if (info->PixelFormat == PixelBitMask) {
+        color = uefi_masked_component(r, info->PixelInformation.RedMask) |
+                uefi_masked_component(g, info->PixelInformation.GreenMask) |
+                uefi_masked_component(b, info->PixelInformation.BlueMask);
+    } else {
+        return -1;
+    }
+
+    for (y = 0; y < info->VerticalResolution; y++) {
+        UINTN row = (UINTN)y * (UINTN)info->PixelsPerScanLine;
+        for (x = 0; x < info->HorizontalResolution; x++) {
+            fb[row + x] = color;
+        }
+    }
+    return 0;
+}
+
 static const xiao_hal uefi_hal = {
     uefi_serial_write,
     uefi_console_write,
     uefi_input_read,
     uefi_wait_ms,
     uefi_yield,
+    uefi_video_fill_rgb888,
+    XIAO_PLATFORM_PC,
 };
 
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {

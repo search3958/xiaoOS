@@ -7,6 +7,9 @@ extern "C" {
 #define XIAO_MAX_TASKS 8
 #define XIAO_MAX_ARGS 8
 #define XIAO_MAX_LINE 128
+#define XIAO_FS_MAX_NODES 48
+#define XIAO_FS_MAX_PATH 64
+#define XIAO_FS_RAM_SIZE 4096
 
 typedef struct {
     const xiao_app *app;
@@ -16,6 +19,22 @@ typedef struct {
 static xiao_task tasks[XIAO_MAX_TASKS];
 static xiao_env current_env;
 static const xiao_boot_image *current_image;
+
+typedef struct {
+    int used;
+    int type;
+    char path[XIAO_FS_MAX_PATH];
+    const char *ro_data;
+    xiao_size ro_size;
+    char *data;
+    xiao_size size;
+    xiao_size capacity;
+} xiao_fs_node;
+
+static xiao_fs_node fs_nodes[XIAO_FS_MAX_NODES];
+static char fs_ram[XIAO_FS_RAM_SIZE];
+static xiao_size fs_ram_used;
+static char fs_cwd[XIAO_FS_MAX_PATH];
 
 static xiao_size xiao_strlen(const char *s) {
     xiao_size n = 0;
@@ -29,6 +48,245 @@ static int xiao_streq(const char *a, const char *b) {
         b++;
     }
     return *a == 0 && *b == 0;
+}
+
+static int xiao_strcmp(const char *a, const char *b) {
+    while (*a && *b && *a == *b) {
+        a++;
+        b++;
+    }
+    return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+static void xiao_memcpy(char *dst, const char *src, xiao_size len) {
+    xiao_size i;
+    for (i = 0; i < len; i++) dst[i] = src[i];
+}
+
+static void xiao_strcpy_cap(char *dst, xiao_size cap, const char *src) {
+    xiao_size i = 0;
+    if (!cap) return;
+    while (src && src[i] && i + 1 < cap) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+}
+
+static int xiao_starts_with_path(const char *path, const char *prefix) {
+    xiao_size i = 0;
+    while (prefix[i]) {
+        if (path[i] != prefix[i]) return 0;
+        i++;
+    }
+    return 1;
+}
+
+static void xiao_path_parent(char *dst, xiao_size cap, const char *path) {
+    xiao_size len = xiao_strlen(path);
+    xiao_size parent_len;
+    while (len > 1 && path[len - 1] == '/') len--;
+    while (len > 1 && path[len - 1] != '/') len--;
+    parent_len = len > 0 ? len - 1 : 0;
+    if (parent_len <= 1) {
+        xiao_strcpy_cap(dst, cap, "/");
+        return;
+    }
+    if (parent_len >= cap) parent_len = cap - 1;
+    xiao_memcpy(dst, path, parent_len);
+    dst[parent_len] = 0;
+}
+
+static const char *xiao_path_basename(const char *path) {
+    const char *base = path;
+    while (*path) {
+        if (*path == '/' && path[1]) base = path + 1;
+        path++;
+    }
+    return base;
+}
+
+static int xiao_path_normalize(const char *input, char *out, xiao_size cap) {
+    char temp[XIAO_FS_MAX_PATH];
+    xiao_size pos = 0;
+    xiao_size i = 0;
+    if (!input || !input[0] || !cap) return -1;
+    if (input[0] == '/') {
+        temp[pos++] = '/';
+        temp[pos] = 0;
+        input++;
+    } else {
+        xiao_strcpy_cap(temp, sizeof(temp), fs_cwd[0] ? fs_cwd : "/");
+        pos = xiao_strlen(temp);
+        if (pos == 0 || temp[pos - 1] != '/') {
+            if (pos + 1 >= sizeof(temp)) return -1;
+            temp[pos++] = '/';
+            temp[pos] = 0;
+        }
+    }
+    while (1) {
+        char part[XIAO_FS_MAX_PATH];
+        xiao_size n = 0;
+        while (input[i] == '/') i++;
+        while (input[i] && input[i] != '/') {
+            if (n + 1 < sizeof(part)) part[n++] = input[i];
+            i++;
+        }
+        part[n] = 0;
+        if (n == 0) break;
+        if (xiao_streq(part, ".")) {
+        } else if (xiao_streq(part, "..")) {
+            while (pos > 1 && temp[pos - 1] == '/') pos--;
+            while (pos > 1 && temp[pos - 1] != '/') pos--;
+            temp[pos] = 0;
+        } else {
+            if (pos > 1 && temp[pos - 1] != '/') {
+                if (pos + 1 >= sizeof(temp)) return -1;
+                temp[pos++] = '/';
+            }
+            if (pos + n >= sizeof(temp)) return -1;
+            xiao_memcpy(temp + pos, part, n);
+            pos += n;
+            temp[pos] = 0;
+        }
+        if (!input[i]) break;
+    }
+    if (pos == 0) {
+        temp[pos++] = '/';
+        temp[pos] = 0;
+    }
+    while (pos > 1 && temp[pos - 1] == '/') {
+        temp[--pos] = 0;
+    }
+    xiao_strcpy_cap(out, cap, temp);
+    return 0;
+}
+
+static xiao_fs_node *xiao_fs_find_abs(const char *path) {
+    xiao_size i;
+    for (i = 0; i < XIAO_FS_MAX_NODES; i++) {
+        if (fs_nodes[i].used && xiao_streq(fs_nodes[i].path, path)) return &fs_nodes[i];
+    }
+    return 0;
+}
+
+static xiao_fs_node *xiao_fs_alloc_node(void) {
+    xiao_size i;
+    for (i = 0; i < XIAO_FS_MAX_NODES; i++) {
+        if (!fs_nodes[i].used) {
+            fs_nodes[i].used = 1;
+            fs_nodes[i].ro_data = 0;
+            fs_nodes[i].ro_size = 0;
+            fs_nodes[i].data = 0;
+            fs_nodes[i].size = 0;
+            fs_nodes[i].capacity = 0;
+            return &fs_nodes[i];
+        }
+    }
+    return 0;
+}
+
+static int xiao_fs_ensure_dir_abs(const char *path) {
+    char parent[XIAO_FS_MAX_PATH];
+    xiao_fs_node *node = xiao_fs_find_abs(path);
+    if (node) return node->type == XIAO_FS_DIR ? 0 : -1;
+    if (!xiao_streq(path, "/")) {
+        xiao_path_parent(parent, sizeof(parent), path);
+        if (xiao_fs_ensure_dir_abs(parent) != 0) return -1;
+    }
+    node = xiao_fs_alloc_node();
+    if (!node) return -1;
+    node->type = XIAO_FS_DIR;
+    xiao_strcpy_cap(node->path, sizeof(node->path), path);
+    return 0;
+}
+
+static int xiao_fs_write_abs(const char *path, const char *data, xiao_size size) {
+    char parent[XIAO_FS_MAX_PATH];
+    xiao_fs_node *node = xiao_fs_find_abs(path);
+    if (!node) {
+        xiao_path_parent(parent, sizeof(parent), path);
+        if (xiao_fs_ensure_dir_abs(parent) != 0) return -1;
+        node = xiao_fs_alloc_node();
+        if (!node) return -1;
+        xiao_strcpy_cap(node->path, sizeof(node->path), path);
+        node->type = XIAO_FS_FILE;
+    }
+    if (node->type != XIAO_FS_FILE) return -1;
+    if (node->capacity < size) {
+        if (fs_ram_used + size > sizeof(fs_ram)) return -1;
+        node->data = fs_ram + fs_ram_used;
+        node->capacity = size;
+        fs_ram_used += size;
+    }
+    if (size) xiao_memcpy(node->data, data, size);
+    node->size = size;
+    node->ro_data = 0;
+    node->ro_size = 0;
+    return 0;
+}
+
+static int xiao_fs_immediate_child(const char *dir, const char *path) {
+    xiao_size len = xiao_strlen(dir);
+    const char *rest;
+    if (xiao_streq(dir, "/")) {
+        if (path[0] != '/' || path[1] == 0) return 0;
+        rest = path + 1;
+    } else {
+        if (xiao_strcmp(path, dir) == 0) return 0;
+        if (xiao_strlen(path) <= len || path[len] != '/') return 0;
+        if (!xiao_starts_with_path(path, dir)) return 0;
+        rest = path + len + 1;
+    }
+    while (*rest) {
+        if (*rest == '/') return 0;
+        rest++;
+    }
+    return 1;
+}
+
+static const char *xiao_fs_node_data(xiao_fs_node *node) {
+    if (!node || node->type != XIAO_FS_FILE) return 0;
+    return node->data ? node->data : node->ro_data;
+}
+
+static xiao_size xiao_fs_node_size(xiao_fs_node *node) {
+    if (!node || node->type != XIAO_FS_FILE) return 0;
+    return node->data ? node->size : node->ro_size;
+}
+
+static void xiao_fs_init(const xiao_boot_image *image) {
+    xiao_size i;
+    fs_ram_used = 0;
+    xiao_strcpy_cap(fs_cwd, sizeof(fs_cwd), "/");
+    for (i = 0; i < XIAO_FS_MAX_NODES; i++) fs_nodes[i].used = 0;
+    xiao_fs_ensure_dir_abs("/");
+    if (!image) return;
+    for (i = 0; i < image->file_count; i++) {
+        char path[XIAO_FS_MAX_PATH];
+        char parent[XIAO_FS_MAX_PATH];
+        xiao_size path_len;
+        xiao_fs_node *node;
+        path[0] = '/';
+        xiao_strcpy_cap(path + 1, sizeof(path) - 1, image->files[i].name);
+        path_len = xiao_strlen(path);
+        if (path_len > 1 && path[path_len - 1] == '/') {
+            while (path_len > 1 && path[path_len - 1] == '/') {
+                path[--path_len] = 0;
+            }
+            xiao_fs_ensure_dir_abs(path);
+            continue;
+        }
+        xiao_path_parent(parent, sizeof(parent), path);
+        if (xiao_fs_ensure_dir_abs(parent) != 0) continue;
+        if (xiao_fs_find_abs(path)) continue;
+        node = xiao_fs_alloc_node();
+        if (!node) continue;
+        node->type = XIAO_FS_FILE;
+        xiao_strcpy_cap(node->path, sizeof(node->path), path);
+        node->ro_data = image->files[i].data;
+        node->ro_size = image->files[i].size;
+    }
 }
 
 static void xiao_copy_word(char *dst, xiao_size cap, const char **src) {
@@ -157,6 +415,7 @@ void xiao_start(const xiao_hal *hal, const xiao_boot_image *image) {
     current_env.ipc.argc = 0;
     current_env.ipc.argv = 0;
     current_image = image;
+    xiao_fs_init(image);
     for (i = 0; i < XIAO_MAX_TASKS; i++) tasks[i].active = 0;
     if (image) xiao_run_boot_text(image);
     while (1) xiao_wait(&current_env, 1000);
@@ -240,26 +499,238 @@ const char *xiao_app_name(xiao_size index) {
     return current_image->apps[index].name;
 }
 
+xiao_size xiao_task_slot_count(void) {
+    return XIAO_MAX_TASKS;
+}
+
+xiao_size xiao_task_active_count(void) {
+    xiao_size i;
+    xiao_size count = 0;
+    for (i = 0; i < XIAO_MAX_TASKS; i++) {
+        if (tasks[i].active) count++;
+    }
+    return count;
+}
+
+const char *xiao_task_name(xiao_size index) {
+    if (index >= XIAO_MAX_TASKS || !tasks[index].active || !tasks[index].app) return 0;
+    return tasks[index].app->name;
+}
+
+const char *xiao_current_app(void) {
+    return current_env.app_name ? current_env.app_name : "kernel";
+}
+
 xiao_size xiao_file_count(void) {
-    return current_image ? current_image->file_count : 0;
+    xiao_size i;
+    xiao_size count = 0;
+    for (i = 0; i < XIAO_FS_MAX_NODES; i++) {
+        if (fs_nodes[i].used && fs_nodes[i].type == XIAO_FS_FILE) count++;
+    }
+    return count;
 }
 
 const char *xiao_file_name(xiao_size index) {
-    if (!current_image || index >= current_image->file_count) return 0;
-    return current_image->files[index].name;
+    xiao_size i;
+    xiao_size count = 0;
+    for (i = 0; i < XIAO_FS_MAX_NODES; i++) {
+        if (fs_nodes[i].used && fs_nodes[i].type == XIAO_FS_FILE) {
+            if (count == index) return fs_nodes[i].path;
+            count++;
+        }
+    }
+    return 0;
 }
 
 int xiao_file_read(const char *name, const char **data, xiao_size *size) {
+    return xiao_fs_read(name, data, size);
+}
+
+const char *xiao_fs_cwd(void) {
+    return fs_cwd;
+}
+
+int xiao_fs_chdir(const char *path) {
+    char abs[XIAO_FS_MAX_PATH];
+    xiao_fs_node *node;
+    if (xiao_path_normalize(path, abs, sizeof(abs)) != 0) return -1;
+    node = xiao_fs_find_abs(abs);
+    if (!node || node->type != XIAO_FS_DIR) return -1;
+    xiao_strcpy_cap(fs_cwd, sizeof(fs_cwd), abs);
+    return 0;
+}
+
+int xiao_fs_stat(const char *path, int *type, xiao_size *size) {
+    char abs[XIAO_FS_MAX_PATH];
+    xiao_fs_node *node;
+    if (xiao_path_normalize(path, abs, sizeof(abs)) != 0) return -1;
+    node = xiao_fs_find_abs(abs);
+    if (!node) return -1;
+    if (type) *type = node->type;
+    if (size) *size = xiao_fs_node_size(node);
+    return 0;
+}
+
+int xiao_fs_list(const char *path, xiao_size index, const char **name, int *type, xiao_size *size) {
     xiao_size i;
-    if (!current_image || !name) return -1;
-    for (i = 0; i < current_image->file_count; i++) {
-        if (xiao_streq(current_image->files[i].name, name)) {
-            if (data) *data = current_image->files[i].data;
-            if (size) *size = current_image->files[i].size;
-            return 0;
+    xiao_size count = 0;
+    char abs[XIAO_FS_MAX_PATH];
+    static char display[XIAO_FS_MAX_PATH];
+    xiao_fs_node *dir;
+    if (xiao_path_normalize(path && path[0] ? path : ".", abs, sizeof(abs)) != 0) return -1;
+    dir = xiao_fs_find_abs(abs);
+    if (!dir || dir->type != XIAO_FS_DIR) return -1;
+    for (i = 0; i < XIAO_FS_MAX_NODES; i++) {
+        if (fs_nodes[i].used && xiao_fs_immediate_child(abs, fs_nodes[i].path)) {
+            if (count == index) {
+                xiao_strcpy_cap(display, sizeof(display), xiao_path_basename(fs_nodes[i].path));
+                if (fs_nodes[i].type == XIAO_FS_DIR) {
+                    xiao_size len = xiao_strlen(display);
+                    if (len + 1 < sizeof(display)) {
+                        display[len] = '/';
+                        display[len + 1] = 0;
+                    }
+                }
+                if (name) *name = display;
+                if (type) *type = fs_nodes[i].type;
+                if (size) *size = xiao_fs_node_size(&fs_nodes[i]);
+                return 0;
+            }
+            count++;
         }
     }
     return -1;
+}
+
+int xiao_fs_read(const char *path, const char **data, xiao_size *size) {
+    char abs[XIAO_FS_MAX_PATH];
+    xiao_fs_node *node;
+    if (xiao_path_normalize(path, abs, sizeof(abs)) != 0) return -1;
+    node = xiao_fs_find_abs(abs);
+    if (!node || node->type != XIAO_FS_FILE) return -1;
+    if (data) *data = xiao_fs_node_data(node);
+    if (size) *size = xiao_fs_node_size(node);
+    return 0;
+}
+
+int xiao_fs_write(const char *path, const char *data, xiao_size size) {
+    char abs[XIAO_FS_MAX_PATH];
+    if (xiao_path_normalize(path, abs, sizeof(abs)) != 0) return -1;
+    return xiao_fs_write_abs(abs, data, size);
+}
+
+int xiao_fs_mkdir(const char *path) {
+    char abs[XIAO_FS_MAX_PATH];
+    if (xiao_path_normalize(path, abs, sizeof(abs)) != 0) return -1;
+    return xiao_fs_ensure_dir_abs(abs);
+}
+
+int xiao_fs_remove(const char *path) {
+    xiao_size i;
+    xiao_size len;
+    char abs[XIAO_FS_MAX_PATH];
+    if (xiao_path_normalize(path, abs, sizeof(abs)) != 0 || xiao_streq(abs, "/")) return -1;
+    if (!xiao_fs_find_abs(abs)) return -1;
+    len = xiao_strlen(abs);
+    for (i = 0; i < XIAO_FS_MAX_NODES; i++) {
+        if (!fs_nodes[i].used) continue;
+        if (xiao_streq(fs_nodes[i].path, abs) ||
+            (xiao_starts_with_path(fs_nodes[i].path, abs) && fs_nodes[i].path[len] == '/')) {
+            fs_nodes[i].used = 0;
+        }
+    }
+    if (xiao_starts_with_path(fs_cwd, abs) && (fs_cwd[len] == 0 || fs_cwd[len] == '/')) {
+        xiao_strcpy_cap(fs_cwd, sizeof(fs_cwd), "/");
+    }
+    return 0;
+}
+
+int xiao_fs_rename(const char *old_path, const char *new_path) {
+    xiao_size i;
+    xiao_size old_len;
+    char old_abs[XIAO_FS_MAX_PATH];
+    char new_abs[XIAO_FS_MAX_PATH];
+    char parent[XIAO_FS_MAX_PATH];
+    if (xiao_path_normalize(old_path, old_abs, sizeof(old_abs)) != 0) return -1;
+    if (xiao_path_normalize(new_path, new_abs, sizeof(new_abs)) != 0) return -1;
+    if (xiao_streq(old_abs, "/") || xiao_fs_find_abs(new_abs) || !xiao_fs_find_abs(old_abs)) return -1;
+    old_len = xiao_strlen(old_abs);
+    if (xiao_starts_with_path(new_abs, old_abs) && (new_abs[old_len] == 0 || new_abs[old_len] == '/')) return -1;
+    xiao_path_parent(parent, sizeof(parent), new_abs);
+    if (!xiao_fs_find_abs(parent)) return -1;
+    for (i = 0; i < XIAO_FS_MAX_NODES; i++) {
+        if (!fs_nodes[i].used) continue;
+        if (xiao_streq(fs_nodes[i].path, old_abs)) {
+            xiao_strcpy_cap(fs_nodes[i].path, sizeof(fs_nodes[i].path), new_abs);
+        } else if (xiao_starts_with_path(fs_nodes[i].path, old_abs) && fs_nodes[i].path[old_len] == '/') {
+            char suffix[XIAO_FS_MAX_PATH];
+            char merged[XIAO_FS_MAX_PATH];
+            xiao_strcpy_cap(suffix, sizeof(suffix), fs_nodes[i].path + old_len);
+            xiao_strcpy_cap(merged, sizeof(merged), new_abs);
+            if (xiao_strlen(merged) + xiao_strlen(suffix) >= sizeof(merged)) return -1;
+            xiao_strcpy_cap(merged + xiao_strlen(merged), sizeof(merged) - xiao_strlen(merged), suffix);
+            xiao_strcpy_cap(fs_nodes[i].path, sizeof(fs_nodes[i].path), merged);
+        }
+    }
+    return 0;
+}
+
+int xiao_fs_copy(const char *src_path, const char *dst_path) {
+    xiao_size i;
+    xiao_size src_len;
+    char src_abs[XIAO_FS_MAX_PATH];
+    char dst_abs[XIAO_FS_MAX_PATH];
+    xiao_fs_node *src;
+    if (xiao_path_normalize(src_path, src_abs, sizeof(src_abs)) != 0) return -1;
+    if (xiao_path_normalize(dst_path, dst_abs, sizeof(dst_abs)) != 0) return -1;
+    src = xiao_fs_find_abs(src_abs);
+    if (!src || xiao_fs_find_abs(dst_abs)) return -1;
+    src_len = xiao_strlen(src_abs);
+    if (xiao_starts_with_path(dst_abs, src_abs) && (dst_abs[src_len] == 0 || dst_abs[src_len] == '/')) return -1;
+
+    if (src->type == XIAO_FS_FILE) {
+        return xiao_fs_write_abs(dst_abs, xiao_fs_node_data(src), xiao_fs_node_size(src));
+    }
+    if (src->type != XIAO_FS_DIR || xiao_fs_ensure_dir_abs(dst_abs) != 0) return -1;
+
+    for (i = 0; i < XIAO_FS_MAX_NODES; i++) {
+        char merged[XIAO_FS_MAX_PATH];
+        const char *suffix;
+        if (!fs_nodes[i].used || xiao_streq(fs_nodes[i].path, src_abs)) continue;
+        if (!xiao_starts_with_path(fs_nodes[i].path, src_abs) || fs_nodes[i].path[src_len] != '/') continue;
+        suffix = fs_nodes[i].path + src_len;
+        if (xiao_strlen(dst_abs) + xiao_strlen(suffix) >= sizeof(merged)) return -1;
+        xiao_strcpy_cap(merged, sizeof(merged), dst_abs);
+        xiao_strcpy_cap(merged + xiao_strlen(merged), sizeof(merged) - xiao_strlen(merged), suffix);
+        if (fs_nodes[i].type == XIAO_FS_DIR) {
+            if (xiao_fs_ensure_dir_abs(merged) != 0) return -1;
+        } else if (fs_nodes[i].type == XIAO_FS_FILE) {
+            if (xiao_fs_write_abs(merged, xiao_fs_node_data(&fs_nodes[i]), xiao_fs_node_size(&fs_nodes[i])) != 0) return -1;
+        }
+    }
+    return 0;
+}
+
+void xiao_fs_info_read(xiao_fs_info *info) {
+    xiao_size i;
+    if (!info) return;
+    info->nodes_used = 0;
+    info->nodes_total = XIAO_FS_MAX_NODES;
+    info->files = 0;
+    info->dirs = 0;
+    info->ram_used = fs_ram_used;
+    info->ram_total = sizeof(fs_ram);
+    info->rom_used = 0;
+    for (i = 0; i < XIAO_FS_MAX_NODES; i++) {
+        if (!fs_nodes[i].used) continue;
+        info->nodes_used++;
+        if (fs_nodes[i].type == XIAO_FS_DIR) {
+            info->dirs++;
+        } else if (fs_nodes[i].type == XIAO_FS_FILE) {
+            info->files++;
+            if (!fs_nodes[i].data) info->rom_used += fs_nodes[i].ro_size;
+        }
+    }
 }
 
 void xiao_wait(xiao_env *env, xiao_tick ms) {
@@ -276,12 +747,23 @@ void xiao_yield(xiao_env *env) {
 #include "xiao.h"
 
 int xiao_app_cat(xiao_env *env);
+int xiao_app_cd(xiao_env *env);
+int xiao_app_cp(xiao_env *env);
+int xiao_app_df(xiao_env *env);
+int xiao_app_free(xiao_env *env);
 int xiao_app_grep(xiao_env *env);
+int xiao_app_head(xiao_env *env);
 int xiao_app_hello(xiao_env *env);
+int xiao_app_less(xiao_env *env);
 int xiao_app_ls(xiao_env *env);
+int xiao_app_mkdir(xiao_env *env);
+int xiao_app_mv(xiao_env *env);
+int xiao_app_pwd(xiao_env *env);
+int xiao_app_rm(xiao_env *env);
 int xiao_app_sed(xiao_env *env);
 int xiao_app_serial_hello(xiao_env *env);
 int xiao_app_terminal(xiao_env *env);
+int xiao_app_top(xiao_env *env);
 int xiao_app_xuexi(xiao_env *env);
 
 static const char boot_text[] =
@@ -295,12 +777,1094 @@ static const char boot_text[] =
     ;
 
 static const char file_0[] = {
+    0
+};
+
+static const char file_1[] = {
+    65, 116, 116, 114, 105, 98, 117, 116, 105, 111, 110, 45, 78, 111, 110, 67, 111, 109, 
+    109, 101, 114, 99, 105, 97, 108, 32, 52, 46, 48, 32, 73, 110, 116, 101, 114, 110, 
+    97, 116, 105, 111, 110, 97, 108, 10, 10, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
+    61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
+    61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
+    61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
+    61, 61, 61, 61, 61, 61, 61, 61, 10, 10, 67, 114, 101, 97, 116, 105, 118, 101, 
+    32, 67, 111, 109, 109, 111, 110, 115, 32, 67, 111, 114, 112, 111, 114, 97, 116, 105, 
+    111, 110, 32, 40, 34, 67, 114, 101, 97, 116, 105, 118, 101, 32, 67, 111, 109, 109, 
+    111, 110, 115, 34, 41, 32, 105, 115, 32, 110, 111, 116, 32, 97, 32, 108, 97, 119, 
+    32, 102, 105, 114, 109, 32, 97, 110, 100, 10, 100, 111, 101, 115, 32, 110, 111, 116, 
+    32, 112, 114, 111, 118, 105, 100, 101, 32, 108, 101, 103, 97, 108, 32, 115, 101, 114, 
+    118, 105, 99, 101, 115, 32, 111, 114, 32, 108, 101, 103, 97, 108, 32, 97, 100, 118, 
+    105, 99, 101, 46, 32, 68, 105, 115, 116, 114, 105, 98, 117, 116, 105, 111, 110, 32, 
+    111, 102, 10, 67, 114, 101, 97, 116, 105, 118, 101, 32, 67, 111, 109, 109, 111, 110, 
+    115, 32, 112, 117, 98, 108, 105, 99, 32, 108, 105, 99, 101, 110, 115, 101, 115, 32, 
+    100, 111, 101, 115, 32, 110, 111, 116, 32, 99, 114, 101, 97, 116, 101, 32, 97, 32, 
+    108, 97, 119, 121, 101, 114, 45, 99, 108, 105, 101, 110, 116, 32, 111, 114, 10, 111, 
+    116, 104, 101, 114, 32, 114, 101, 108, 97, 116, 105, 111, 110, 115, 104, 105, 112, 46, 
+    32, 67, 114, 101, 97, 116, 105, 118, 101, 32, 67, 111, 109, 109, 111, 110, 115, 32, 
+    109, 97, 107, 101, 115, 32, 105, 116, 115, 32, 108, 105, 99, 101, 110, 115, 101, 115, 
+    32, 97, 110, 100, 32, 114, 101, 108, 97, 116, 101, 100, 10, 105, 110, 102, 111, 114, 
+    109, 97, 116, 105, 111, 110, 32, 97, 118, 97, 105, 108, 97, 98, 108, 101, 32, 111, 
+    110, 32, 97, 110, 32, 34, 97, 115, 45, 105, 115, 34, 32, 98, 97, 115, 105, 115, 
+    46, 32, 67, 114, 101, 97, 116, 105, 118, 101, 32, 67, 111, 109, 109, 111, 110, 115, 
+    32, 103, 105, 118, 101, 115, 32, 110, 111, 10, 119, 97, 114, 114, 97, 110, 116, 105, 
+    101, 115, 32, 114, 101, 103, 97, 114, 100, 105, 110, 103, 32, 105, 116, 115, 32, 108, 
+    105, 99, 101, 110, 115, 101, 115, 44, 32, 97, 110, 121, 32, 109, 97, 116, 101, 114, 
+    105, 97, 108, 32, 108, 105, 99, 101, 110, 115, 101, 100, 32, 117, 110, 100, 101, 114, 
+    32, 116, 104, 101, 105, 114, 10, 116, 101, 114, 109, 115, 32, 97, 110, 100, 32, 99, 
+    111, 110, 100, 105, 116, 105, 111, 110, 115, 44, 32, 111, 114, 32, 97, 110, 121, 32, 
+    114, 101, 108, 97, 116, 101, 100, 32, 105, 110, 102, 111, 114, 109, 97, 116, 105, 111, 
+    110, 46, 32, 67, 114, 101, 97, 116, 105, 118, 101, 32, 67, 111, 109, 109, 111, 110, 
+    115, 10, 100, 105, 115, 99, 108, 97, 105, 109, 115, 32, 97, 108, 108, 32, 108, 105, 
+    97, 98, 105, 108, 105, 116, 121, 32, 102, 111, 114, 32, 100, 97, 109, 97, 103, 101, 
+    115, 32, 114, 101, 115, 117, 108, 116, 105, 110, 103, 32, 102, 114, 111, 109, 32, 116, 
+    104, 101, 105, 114, 32, 117, 115, 101, 32, 116, 111, 32, 116, 104, 101, 10, 102, 117, 
+    108, 108, 101, 115, 116, 32, 101, 120, 116, 101, 110, 116, 32, 112, 111, 115, 115, 105, 
+    98, 108, 101, 46, 10, 10, 85, 115, 105, 110, 103, 32, 67, 114, 101, 97, 116, 105, 
+    118, 101, 32, 67, 111, 109, 109, 111, 110, 115, 32, 80, 117, 98, 108, 105, 99, 32, 
+    76, 105, 99, 101, 110, 115, 101, 115, 10, 10, 67, 114, 101, 97, 116, 105, 118, 101, 
+    32, 67, 111, 109, 109, 111, 110, 115, 32, 112, 117, 98, 108, 105, 99, 32, 108, 105, 
+    99, 101, 110, 115, 101, 115, 32, 112, 114, 111, 118, 105, 100, 101, 32, 97, 32, 115, 
+    116, 97, 110, 100, 97, 114, 100, 32, 115, 101, 116, 32, 111, 102, 32, 116, 101, 114, 
+    109, 115, 32, 97, 110, 100, 10, 99, 111, 110, 100, 105, 116, 105, 111, 110, 115, 32, 
+    116, 104, 97, 116, 32, 99, 114, 101, 97, 116, 111, 114, 115, 32, 97, 110, 100, 32, 
+    111, 116, 104, 101, 114, 32, 114, 105, 103, 104, 116, 115, 32, 104, 111, 108, 100, 101, 
+    114, 115, 32, 109, 97, 121, 32, 117, 115, 101, 32, 116, 111, 32, 115, 104, 97, 114, 
+    101, 10, 111, 114, 105, 103, 105, 110, 97, 108, 32, 119, 111, 114, 107, 115, 32, 111, 
+    102, 32, 97, 117, 116, 104, 111, 114, 115, 104, 105, 112, 32, 97, 110, 100, 32, 111, 
+    116, 104, 101, 114, 32, 109, 97, 116, 101, 114, 105, 97, 108, 32, 115, 117, 98, 106, 
+    101, 99, 116, 32, 116, 111, 32, 99, 111, 112, 121, 114, 105, 103, 104, 116, 10, 97, 
+    110, 100, 32, 99, 101, 114, 116, 97, 105, 110, 32, 111, 116, 104, 101, 114, 32, 114, 
+    105, 103, 104, 116, 115, 32, 115, 112, 101, 99, 105, 102, 105, 101, 100, 32, 105, 110, 
+    32, 116, 104, 101, 32, 112, 117, 98, 108, 105, 99, 32, 108, 105, 99, 101, 110, 115, 
+    101, 32, 98, 101, 108, 111, 119, 46, 32, 84, 104, 101, 10, 102, 111, 108, 108, 111, 
+    119, 105, 110, 103, 32, 99, 111, 110, 115, 105, 100, 101, 114, 97, 116, 105, 111, 110, 
+    115, 32, 97, 114, 101, 32, 102, 111, 114, 32, 105, 110, 102, 111, 114, 109, 97, 116, 
+    105, 111, 110, 97, 108, 32, 112, 117, 114, 112, 111, 115, 101, 115, 32, 111, 110, 108, 
+    121, 44, 32, 97, 114, 101, 32, 110, 111, 116, 10, 101, 120, 104, 97, 117, 115, 116, 
+    105, 118, 101, 44, 32, 97, 110, 100, 32, 100, 111, 32, 110, 111, 116, 32, 102, 111, 
+    114, 109, 32, 112, 97, 114, 116, 32, 111, 102, 32, 111, 117, 114, 32, 108, 105, 99, 
+    101, 110, 115, 101, 115, 46, 10, 10, 32, 32, 32, 32, 32, 67, 111, 110, 115, 105, 
+    100, 101, 114, 97, 116, 105, 111, 110, 115, 32, 102, 111, 114, 32, 108, 105, 99, 101, 
+    110, 115, 111, 114, 115, 58, 32, 79, 117, 114, 32, 112, 117, 98, 108, 105, 99, 32, 
+    108, 105, 99, 101, 110, 115, 101, 115, 32, 97, 114, 101, 10, 32, 32, 32, 32, 32, 
+    105, 110, 116, 101, 110, 100, 101, 100, 32, 102, 111, 114, 32, 117, 115, 101, 32, 98, 
+    121, 32, 116, 104, 111, 115, 101, 32, 97, 117, 116, 104, 111, 114, 105, 122, 101, 100, 
+    32, 116, 111, 32, 103, 105, 118, 101, 32, 116, 104, 101, 32, 112, 117, 98, 108, 105, 
+    99, 10, 32, 32, 32, 32, 32, 112, 101, 114, 109, 105, 115, 115, 105, 111, 110, 32, 
+    116, 111, 32, 117, 115, 101, 32, 109, 97, 116, 101, 114, 105, 97, 108, 32, 105, 110, 
+    32, 119, 97, 121, 115, 32, 111, 116, 104, 101, 114, 119, 105, 115, 101, 32, 114, 101, 
+    115, 116, 114, 105, 99, 116, 101, 100, 32, 98, 121, 10, 32, 32, 32, 32, 32, 99, 
+    111, 112, 121, 114, 105, 103, 104, 116, 32, 97, 110, 100, 32, 99, 101, 114, 116, 97, 
+    105, 110, 32, 111, 116, 104, 101, 114, 32, 114, 105, 103, 104, 116, 115, 46, 32, 79, 
+    117, 114, 32, 108, 105, 99, 101, 110, 115, 101, 115, 32, 97, 114, 101, 10, 32, 32, 
+    32, 32, 32, 105, 114, 114, 101, 118, 111, 99, 97, 98, 108, 101, 46, 32, 76, 105, 
+    99, 101, 110, 115, 111, 114, 115, 32, 115, 104, 111, 117, 108, 100, 32, 114, 101, 97, 
+    100, 32, 97, 110, 100, 32, 117, 110, 100, 101, 114, 115, 116, 97, 110, 100, 32, 116, 
+    104, 101, 32, 116, 101, 114, 109, 115, 10, 32, 32, 32, 32, 32, 97, 110, 100, 32, 
+    99, 111, 110, 100, 105, 116, 105, 111, 110, 115, 32, 111, 102, 32, 116, 104, 101, 32, 
+    108, 105, 99, 101, 110, 115, 101, 32, 116, 104, 101, 121, 32, 99, 104, 111, 111, 115, 
+    101, 32, 98, 101, 102, 111, 114, 101, 32, 97, 112, 112, 108, 121, 105, 110, 103, 32, 
+    105, 116, 46, 10, 32, 32, 32, 32, 32, 76, 105, 99, 101, 110, 115, 111, 114, 115, 
+    32, 115, 104, 111, 117, 108, 100, 32, 97, 108, 115, 111, 32, 115, 101, 99, 117, 114, 
+    101, 32, 97, 108, 108, 32, 114, 105, 103, 104, 116, 115, 32, 110, 101, 99, 101, 115, 
+    115, 97, 114, 121, 32, 98, 101, 102, 111, 114, 101, 10, 32, 32, 32, 32, 32, 97, 
+    112, 112, 108, 121, 105, 110, 103, 32, 111, 117, 114, 32, 108, 105, 99, 101, 110, 115, 
+    101, 115, 32, 115, 111, 32, 116, 104, 97, 116, 32, 116, 104, 101, 32, 112, 117, 98, 
+    108, 105, 99, 32, 99, 97, 110, 32, 114, 101, 117, 115, 101, 32, 116, 104, 101, 10, 
+    32, 32, 32, 32, 32, 109, 97, 116, 101, 114, 105, 97, 108, 32, 97, 115, 32, 101, 
+    120, 112, 101, 99, 116, 101, 100, 46, 32, 76, 105, 99, 101, 110, 115, 111, 114, 115, 
+    32, 115, 104, 111, 117, 108, 100, 32, 99, 108, 101, 97, 114, 108, 121, 32, 109, 97, 
+    114, 107, 32, 97, 110, 121, 10, 32, 32, 32, 32, 32, 109, 97, 116, 101, 114, 105, 
+    97, 108, 32, 110, 111, 116, 32, 115, 117, 98, 106, 101, 99, 116, 32, 116, 111, 32, 
+    116, 104, 101, 32, 108, 105, 99, 101, 110, 115, 101, 46, 32, 84, 104, 105, 115, 32, 
+    105, 110, 99, 108, 117, 100, 101, 115, 32, 111, 116, 104, 101, 114, 32, 67, 67, 45, 
+    10, 32, 32, 32, 32, 32, 108, 105, 99, 101, 110, 115, 101, 100, 32, 109, 97, 116, 
+    101, 114, 105, 97, 108, 44, 32, 111, 114, 32, 109, 97, 116, 101, 114, 105, 97, 108, 
+    32, 117, 115, 101, 100, 32, 117, 110, 100, 101, 114, 32, 97, 110, 32, 101, 120, 99, 
+    101, 112, 116, 105, 111, 110, 32, 111, 114, 10, 32, 32, 32, 32, 32, 108, 105, 109, 
+    105, 116, 97, 116, 105, 111, 110, 32, 116, 111, 32, 99, 111, 112, 121, 114, 105, 103, 
+    104, 116, 46, 32, 77, 111, 114, 101, 32, 99, 111, 110, 115, 105, 100, 101, 114, 97, 
+    116, 105, 111, 110, 115, 32, 102, 111, 114, 32, 108, 105, 99, 101, 110, 115, 111, 114, 
+    115, 58, 10, 32, 32, 32, 32, 119, 105, 107, 105, 46, 99, 114, 101, 97, 116, 105, 
+    118, 101, 99, 111, 109, 109, 111, 110, 115, 46, 111, 114, 103, 47, 67, 111, 110, 115, 
+    105, 100, 101, 114, 97, 116, 105, 111, 110, 115, 95, 102, 111, 114, 95, 108, 105, 99, 
+    101, 110, 115, 111, 114, 115, 10, 10, 32, 32, 32, 32, 32, 67, 111, 110, 115, 105, 
+    100, 101, 114, 97, 116, 105, 111, 110, 115, 32, 102, 111, 114, 32, 116, 104, 101, 32, 
+    112, 117, 98, 108, 105, 99, 58, 32, 66, 121, 32, 117, 115, 105, 110, 103, 32, 111, 
+    110, 101, 32, 111, 102, 32, 111, 117, 114, 32, 112, 117, 98, 108, 105, 99, 10, 32, 
+    32, 32, 32, 32, 108, 105, 99, 101, 110, 115, 101, 115, 44, 32, 97, 32, 108, 105, 
+    99, 101, 110, 115, 111, 114, 32, 103, 114, 97, 110, 116, 115, 32, 116, 104, 101, 32, 
+    112, 117, 98, 108, 105, 99, 32, 112, 101, 114, 109, 105, 115, 115, 105, 111, 110, 32, 
+    116, 111, 32, 117, 115, 101, 32, 116, 104, 101, 10, 32, 32, 32, 32, 32, 108, 105, 
+    99, 101, 110, 115, 101, 100, 32, 109, 97, 116, 101, 114, 105, 97, 108, 32, 117, 110, 
+    100, 101, 114, 32, 115, 112, 101, 99, 105, 102, 105, 101, 100, 32, 116, 101, 114, 109, 
+    115, 32, 97, 110, 100, 32, 99, 111, 110, 100, 105, 116, 105, 111, 110, 115, 46, 32, 
+    73, 102, 10, 32, 32, 32, 32, 32, 116, 104, 101, 32, 108, 105, 99, 101, 110, 115, 
+    111, 114, 39, 115, 32, 112, 101, 114, 109, 105, 115, 115, 105, 111, 110, 32, 105, 115, 
+    32, 110, 111, 116, 32, 110, 101, 99, 101, 115, 115, 97, 114, 121, 32, 102, 111, 114, 
+    32, 97, 110, 121, 32, 114, 101, 97, 115, 111, 110, 45, 45, 102, 111, 114, 10, 32, 
+    32, 32, 32, 32, 101, 120, 97, 109, 112, 108, 101, 44, 32, 98, 101, 99, 97, 117, 
+    115, 101, 32, 111, 102, 32, 97, 110, 121, 32, 97, 112, 112, 108, 105, 99, 97, 98, 
+    108, 101, 32, 101, 120, 99, 101, 112, 116, 105, 111, 110, 32, 111, 114, 32, 108, 105, 
+    109, 105, 116, 97, 116, 105, 111, 110, 32, 116, 111, 10, 32, 32, 32, 32, 32, 99, 
+    111, 112, 121, 114, 105, 103, 104, 116, 45, 45, 116, 104, 101, 110, 32, 116, 104, 97, 
+    116, 32, 117, 115, 101, 32, 105, 115, 32, 110, 111, 116, 32, 114, 101, 103, 117, 108, 
+    97, 116, 101, 100, 32, 98, 121, 32, 116, 104, 101, 32, 108, 105, 99, 101, 110, 115, 
+    101, 46, 32, 79, 117, 114, 10, 32, 32, 32, 32, 32, 108, 105, 99, 101, 110, 115, 
+    101, 115, 32, 103, 114, 97, 110, 116, 32, 111, 110, 108, 121, 32, 112, 101, 114, 109, 
+    105, 115, 115, 105, 111, 110, 115, 32, 117, 110, 100, 101, 114, 32, 99, 111, 112, 121, 
+    114, 105, 103, 104, 116, 32, 97, 110, 100, 32, 99, 101, 114, 116, 97, 105, 110, 10, 
+    32, 32, 32, 32, 32, 111, 116, 104, 101, 114, 32, 114, 105, 103, 104, 116, 115, 32, 
+    116, 104, 97, 116, 32, 97, 32, 108, 105, 99, 101, 110, 115, 111, 114, 32, 104, 97, 
+    115, 32, 97, 117, 116, 104, 111, 114, 105, 116, 121, 32, 116, 111, 32, 103, 114, 97, 
+    110, 116, 46, 32, 85, 115, 101, 32, 111, 102, 10, 32, 32, 32, 32, 32, 116, 104, 
+    101, 32, 108, 105, 99, 101, 110, 115, 101, 100, 32, 109, 97, 116, 101, 114, 105, 97, 
+    108, 32, 109, 97, 121, 32, 115, 116, 105, 108, 108, 32, 98, 101, 32, 114, 101, 115, 
+    116, 114, 105, 99, 116, 101, 100, 32, 102, 111, 114, 32, 111, 116, 104, 101, 114, 10, 
+    32, 32, 32, 32, 32, 114, 101, 97, 115, 111, 110, 115, 44, 32, 105, 110, 99, 108, 
+    117, 100, 105, 110, 103, 32, 98, 101, 99, 97, 117, 115, 101, 32, 111, 116, 104, 101, 
+    114, 115, 32, 104, 97, 118, 101, 32, 99, 111, 112, 121, 114, 105, 103, 104, 116, 32, 
+    111, 114, 32, 111, 116, 104, 101, 114, 10, 32, 32, 32, 32, 32, 114, 105, 103, 104, 
+    116, 115, 32, 105, 110, 32, 116, 104, 101, 32, 109, 97, 116, 101, 114, 105, 97, 108, 
+    46, 32, 65, 32, 108, 105, 99, 101, 110, 115, 111, 114, 32, 109, 97, 121, 32, 109, 
+    97, 107, 101, 32, 115, 112, 101, 99, 105, 97, 108, 32, 114, 101, 113, 117, 101, 115, 
+    116, 115, 44, 10, 32, 32, 32, 32, 32, 115, 117, 99, 104, 32, 97, 115, 32, 97, 
+    115, 107, 105, 110, 103, 32, 116, 104, 97, 116, 32, 97, 108, 108, 32, 99, 104, 97, 
+    110, 103, 101, 115, 32, 98, 101, 32, 109, 97, 114, 107, 101, 100, 32, 111, 114, 32, 
+    100, 101, 115, 99, 114, 105, 98, 101, 100, 46, 10, 32, 32, 32, 32, 32, 65, 108, 
+    116, 104, 111, 117, 103, 104, 32, 110, 111, 116, 32, 114, 101, 113, 117, 105, 114, 101, 
+    100, 32, 98, 121, 32, 111, 117, 114, 32, 108, 105, 99, 101, 110, 115, 101, 115, 44, 
+    32, 121, 111, 117, 32, 97, 114, 101, 32, 101, 110, 99, 111, 117, 114, 97, 103, 101, 
+    100, 32, 116, 111, 10, 32, 32, 32, 32, 32, 114, 101, 115, 112, 101, 99, 116, 32, 
+    116, 104, 111, 115, 101, 32, 114, 101, 113, 117, 101, 115, 116, 115, 32, 119, 104, 101, 
+    114, 101, 32, 114, 101, 97, 115, 111, 110, 97, 98, 108, 101, 46, 32, 77, 111, 114, 
+    101, 32, 99, 111, 110, 115, 105, 100, 101, 114, 97, 116, 105, 111, 110, 115, 10, 32, 
+    32, 32, 32, 32, 102, 111, 114, 32, 116, 104, 101, 32, 112, 117, 98, 108, 105, 99, 
+    58, 10, 32, 32, 32, 32, 119, 105, 107, 105, 46, 99, 114, 101, 97, 116, 105, 118, 
+    101, 99, 111, 109, 109, 111, 110, 115, 46, 111, 114, 103, 47, 67, 111, 110, 115, 105, 
+    100, 101, 114, 97, 116, 105, 111, 110, 115, 95, 102, 111, 114, 95, 108, 105, 99, 101, 
+    110, 115, 101, 101, 115, 10, 10, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
+    61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
+    61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
+    61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
+    61, 61, 61, 61, 61, 61, 10, 10, 67, 114, 101, 97, 116, 105, 118, 101, 32, 67, 
+    111, 109, 109, 111, 110, 115, 32, 65, 116, 116, 114, 105, 98, 117, 116, 105, 111, 110, 
+    45, 78, 111, 110, 67, 111, 109, 109, 101, 114, 99, 105, 97, 108, 32, 52, 46, 48, 
+    32, 73, 110, 116, 101, 114, 110, 97, 116, 105, 111, 110, 97, 108, 32, 80, 117, 98, 
+    108, 105, 99, 10, 76, 105, 99, 101, 110, 115, 101, 10, 10, 66, 121, 32, 101, 120, 
+    101, 114, 99, 105, 115, 105, 110, 103, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 
+    115, 101, 100, 32, 82, 105, 103, 104, 116, 115, 32, 40, 100, 101, 102, 105, 110, 101, 
+    100, 32, 98, 101, 108, 111, 119, 41, 44, 32, 89, 111, 117, 32, 97, 99, 99, 101, 
+    112, 116, 32, 97, 110, 100, 32, 97, 103, 114, 101, 101, 10, 116, 111, 32, 98, 101, 
+    32, 98, 111, 117, 110, 100, 32, 98, 121, 32, 116, 104, 101, 32, 116, 101, 114, 109, 
+    115, 32, 97, 110, 100, 32, 99, 111, 110, 100, 105, 116, 105, 111, 110, 115, 32, 111, 
+    102, 32, 116, 104, 105, 115, 32, 67, 114, 101, 97, 116, 105, 118, 101, 32, 67, 111, 
+    109, 109, 111, 110, 115, 10, 65, 116, 116, 114, 105, 98, 117, 116, 105, 111, 110, 45, 
+    78, 111, 110, 67, 111, 109, 109, 101, 114, 99, 105, 97, 108, 32, 52, 46, 48, 32, 
+    73, 110, 116, 101, 114, 110, 97, 116, 105, 111, 110, 97, 108, 32, 80, 117, 98, 108, 
+    105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 32, 40, 34, 80, 117, 98, 108, 105, 
+    99, 10, 76, 105, 99, 101, 110, 115, 101, 34, 41, 46, 32, 84, 111, 32, 116, 104, 
+    101, 32, 101, 120, 116, 101, 110, 116, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 
+    105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 32, 109, 97, 121, 32, 98, 101, 32, 
+    105, 110, 116, 101, 114, 112, 114, 101, 116, 101, 100, 32, 97, 115, 32, 97, 10, 99, 
+    111, 110, 116, 114, 97, 99, 116, 44, 32, 89, 111, 117, 32, 97, 114, 101, 32, 103, 
+    114, 97, 110, 116, 101, 100, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 
+    100, 32, 82, 105, 103, 104, 116, 115, 32, 105, 110, 32, 99, 111, 110, 115, 105, 100, 
+    101, 114, 97, 116, 105, 111, 110, 32, 111, 102, 32, 89, 111, 117, 114, 10, 97, 99, 
+    99, 101, 112, 116, 97, 110, 99, 101, 32, 111, 102, 32, 116, 104, 101, 115, 101, 32, 
+    116, 101, 114, 109, 115, 32, 97, 110, 100, 32, 99, 111, 110, 100, 105, 116, 105, 111, 
+    110, 115, 44, 32, 97, 110, 100, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 
+    111, 114, 32, 103, 114, 97, 110, 116, 115, 32, 89, 111, 117, 10, 115, 117, 99, 104, 
+    32, 114, 105, 103, 104, 116, 115, 32, 105, 110, 32, 99, 111, 110, 115, 105, 100, 101, 
+    114, 97, 116, 105, 111, 110, 32, 111, 102, 32, 98, 101, 110, 101, 102, 105, 116, 115, 
+    32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 111, 114, 32, 114, 101, 99, 101, 
+    105, 118, 101, 115, 32, 102, 114, 111, 109, 10, 109, 97, 107, 105, 110, 103, 32, 116, 
+    104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 
+    97, 108, 32, 97, 118, 97, 105, 108, 97, 98, 108, 101, 32, 117, 110, 100, 101, 114, 
+    32, 116, 104, 101, 115, 101, 32, 116, 101, 114, 109, 115, 32, 97, 110, 100, 10, 99, 
+    111, 110, 100, 105, 116, 105, 111, 110, 115, 46, 10, 10, 10, 83, 101, 99, 116, 105, 
+    111, 110, 32, 49, 32, 45, 45, 32, 68, 101, 102, 105, 110, 105, 116, 105, 111, 110, 
+    115, 46, 10, 10, 32, 32, 97, 46, 32, 65, 100, 97, 112, 116, 101, 100, 32, 77, 
+    97, 116, 101, 114, 105, 97, 108, 32, 109, 101, 97, 110, 115, 32, 109, 97, 116, 101, 
+    114, 105, 97, 108, 32, 115, 117, 98, 106, 101, 99, 116, 32, 116, 111, 32, 67, 111, 
+    112, 121, 114, 105, 103, 104, 116, 32, 97, 110, 100, 32, 83, 105, 109, 105, 108, 97, 
+    114, 10, 32, 32, 32, 32, 32, 82, 105, 103, 104, 116, 115, 32, 116, 104, 97, 116, 
+    32, 105, 115, 32, 100, 101, 114, 105, 118, 101, 100, 32, 102, 114, 111, 109, 32, 111, 
+    114, 32, 98, 97, 115, 101, 100, 32, 117, 112, 111, 110, 32, 116, 104, 101, 32, 76, 
+    105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 10, 32, 
+    32, 32, 32, 32, 97, 110, 100, 32, 105, 110, 32, 119, 104, 105, 99, 104, 32, 116, 
+    104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 
+    97, 108, 32, 105, 115, 32, 116, 114, 97, 110, 115, 108, 97, 116, 101, 100, 44, 32, 
+    97, 108, 116, 101, 114, 101, 100, 44, 10, 32, 32, 32, 32, 32, 97, 114, 114, 97, 
+    110, 103, 101, 100, 44, 32, 116, 114, 97, 110, 115, 102, 111, 114, 109, 101, 100, 44, 
+    32, 111, 114, 32, 111, 116, 104, 101, 114, 119, 105, 115, 101, 32, 109, 111, 100, 105, 
+    102, 105, 101, 100, 32, 105, 110, 32, 97, 32, 109, 97, 110, 110, 101, 114, 32, 114, 
+    101, 113, 117, 105, 114, 105, 110, 103, 10, 32, 32, 32, 32, 32, 112, 101, 114, 109, 
+    105, 115, 115, 105, 111, 110, 32, 117, 110, 100, 101, 114, 32, 116, 104, 101, 32, 67, 
+    111, 112, 121, 114, 105, 103, 104, 116, 32, 97, 110, 100, 32, 83, 105, 109, 105, 108, 
+    97, 114, 32, 82, 105, 103, 104, 116, 115, 32, 104, 101, 108, 100, 32, 98, 121, 32, 
+    116, 104, 101, 10, 32, 32, 32, 32, 32, 76, 105, 99, 101, 110, 115, 111, 114, 46, 
+    32, 70, 111, 114, 32, 112, 117, 114, 112, 111, 115, 101, 115, 32, 111, 102, 32, 116, 
+    104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 
+    44, 32, 119, 104, 101, 114, 101, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 
+    101, 100, 10, 32, 32, 32, 32, 32, 77, 97, 116, 101, 114, 105, 97, 108, 32, 105, 
+    115, 32, 97, 32, 109, 117, 115, 105, 99, 97, 108, 32, 119, 111, 114, 107, 44, 32, 
+    112, 101, 114, 102, 111, 114, 109, 97, 110, 99, 101, 44, 32, 111, 114, 32, 115, 111, 
+    117, 110, 100, 32, 114, 101, 99, 111, 114, 100, 105, 110, 103, 44, 10, 32, 32, 32, 
+    32, 32, 65, 100, 97, 112, 116, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 
+    32, 105, 115, 32, 97, 108, 119, 97, 121, 115, 32, 112, 114, 111, 100, 117, 99, 101, 
+    100, 32, 119, 104, 101, 114, 101, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 
+    101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 32, 105, 115, 10, 32, 32, 32, 
+    32, 32, 115, 121, 110, 99, 104, 101, 100, 32, 105, 110, 32, 116, 105, 109, 101, 100, 
+    32, 114, 101, 108, 97, 116, 105, 111, 110, 32, 119, 105, 116, 104, 32, 97, 32, 109, 
+    111, 118, 105, 110, 103, 32, 105, 109, 97, 103, 101, 46, 10, 10, 32, 32, 98, 46, 
+    32, 65, 100, 97, 112, 116, 101, 114, 39, 115, 32, 76, 105, 99, 101, 110, 115, 101, 
+    32, 109, 101, 97, 110, 115, 32, 116, 104, 101, 32, 108, 105, 99, 101, 110, 115, 101, 
+    32, 89, 111, 117, 32, 97, 112, 112, 108, 121, 32, 116, 111, 32, 89, 111, 117, 114, 
+    32, 67, 111, 112, 121, 114, 105, 103, 104, 116, 10, 32, 32, 32, 32, 32, 97, 110, 
+    100, 32, 83, 105, 109, 105, 108, 97, 114, 32, 82, 105, 103, 104, 116, 115, 32, 105, 
+    110, 32, 89, 111, 117, 114, 32, 99, 111, 110, 116, 114, 105, 98, 117, 116, 105, 111, 
+    110, 115, 32, 116, 111, 32, 65, 100, 97, 112, 116, 101, 100, 32, 77, 97, 116, 101, 
+    114, 105, 97, 108, 32, 105, 110, 10, 32, 32, 32, 32, 32, 97, 99, 99, 111, 114, 
+    100, 97, 110, 99, 101, 32, 119, 105, 116, 104, 32, 116, 104, 101, 32, 116, 101, 114, 
+    109, 115, 32, 97, 110, 100, 32, 99, 111, 110, 100, 105, 116, 105, 111, 110, 115, 32, 
+    111, 102, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 99, 
+    101, 110, 115, 101, 46, 10, 10, 32, 32, 99, 46, 32, 67, 111, 112, 121, 114, 105, 
+    103, 104, 116, 32, 97, 110, 100, 32, 83, 105, 109, 105, 108, 97, 114, 32, 82, 105, 
+    103, 104, 116, 115, 32, 109, 101, 97, 110, 115, 32, 99, 111, 112, 121, 114, 105, 103, 
+    104, 116, 32, 97, 110, 100, 47, 111, 114, 32, 115, 105, 109, 105, 108, 97, 114, 32, 
+    114, 105, 103, 104, 116, 115, 10, 32, 32, 32, 32, 32, 99, 108, 111, 115, 101, 108, 
+    121, 32, 114, 101, 108, 97, 116, 101, 100, 32, 116, 111, 32, 99, 111, 112, 121, 114, 
+    105, 103, 104, 116, 32, 105, 110, 99, 108, 117, 100, 105, 110, 103, 44, 32, 119, 105, 
+    116, 104, 111, 117, 116, 32, 108, 105, 109, 105, 116, 97, 116, 105, 111, 110, 44, 10, 
+    32, 32, 32, 32, 32, 112, 101, 114, 102, 111, 114, 109, 97, 110, 99, 101, 44, 32, 
+    98, 114, 111, 97, 100, 99, 97, 115, 116, 44, 32, 115, 111, 117, 110, 100, 32, 114, 
+    101, 99, 111, 114, 100, 105, 110, 103, 44, 32, 97, 110, 100, 32, 83, 117, 105, 32, 
+    71, 101, 110, 101, 114, 105, 115, 32, 68, 97, 116, 97, 98, 97, 115, 101, 10, 32, 
+    32, 32, 32, 32, 82, 105, 103, 104, 116, 115, 44, 32, 119, 105, 116, 104, 111, 117, 
+    116, 32, 114, 101, 103, 97, 114, 100, 32, 116, 111, 32, 104, 111, 119, 32, 116, 104, 
+    101, 32, 114, 105, 103, 104, 116, 115, 32, 97, 114, 101, 32, 108, 97, 98, 101, 108, 
+    101, 100, 32, 111, 114, 10, 32, 32, 32, 32, 32, 99, 97, 116, 101, 103, 111, 114, 
+    105, 122, 101, 100, 46, 32, 70, 111, 114, 32, 112, 117, 114, 112, 111, 115, 101, 115, 
+    32, 111, 102, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 
+    99, 101, 110, 115, 101, 44, 32, 116, 104, 101, 32, 114, 105, 103, 104, 116, 115, 10, 
+    32, 32, 32, 32, 32, 115, 112, 101, 99, 105, 102, 105, 101, 100, 32, 105, 110, 32, 
+    83, 101, 99, 116, 105, 111, 110, 32, 50, 40, 98, 41, 40, 49, 41, 45, 40, 50, 
+    41, 32, 97, 114, 101, 32, 110, 111, 116, 32, 67, 111, 112, 121, 114, 105, 103, 104, 
+    116, 32, 97, 110, 100, 32, 83, 105, 109, 105, 108, 97, 114, 10, 32, 32, 32, 32, 
+    32, 82, 105, 103, 104, 116, 115, 46, 10, 32, 32, 100, 46, 32, 69, 102, 102, 101, 
+    99, 116, 105, 118, 101, 32, 84, 101, 99, 104, 110, 111, 108, 111, 103, 105, 99, 97, 
+    108, 32, 77, 101, 97, 115, 117, 114, 101, 115, 32, 109, 101, 97, 110, 115, 32, 116, 
+    104, 111, 115, 101, 32, 109, 101, 97, 115, 117, 114, 101, 115, 32, 116, 104, 97, 116, 
+    44, 32, 105, 110, 32, 116, 104, 101, 10, 32, 32, 32, 32, 32, 97, 98, 115, 101, 
+    110, 99, 101, 32, 111, 102, 32, 112, 114, 111, 112, 101, 114, 32, 97, 117, 116, 104, 
+    111, 114, 105, 116, 121, 44, 32, 109, 97, 121, 32, 110, 111, 116, 32, 98, 101, 32, 
+    99, 105, 114, 99, 117, 109, 118, 101, 110, 116, 101, 100, 32, 117, 110, 100, 101, 114, 
+    32, 108, 97, 119, 115, 10, 32, 32, 32, 32, 32, 102, 117, 108, 102, 105, 108, 108, 
+    105, 110, 103, 32, 111, 98, 108, 105, 103, 97, 116, 105, 111, 110, 115, 32, 117, 110, 
+    100, 101, 114, 32, 65, 114, 116, 105, 99, 108, 101, 32, 49, 49, 32, 111, 102, 32, 
+    116, 104, 101, 32, 87, 73, 80, 79, 32, 67, 111, 112, 121, 114, 105, 103, 104, 116, 
+    10, 32, 32, 32, 32, 32, 84, 114, 101, 97, 116, 121, 32, 97, 100, 111, 112, 116, 
+    101, 100, 32, 111, 110, 32, 68, 101, 99, 101, 109, 98, 101, 114, 32, 50, 48, 44, 
+    32, 49, 57, 57, 54, 44, 32, 97, 110, 100, 47, 111, 114, 32, 115, 105, 109, 105, 
+    108, 97, 114, 32, 105, 110, 116, 101, 114, 110, 97, 116, 105, 111, 110, 97, 108, 10, 
+    32, 32, 32, 32, 32, 97, 103, 114, 101, 101, 109, 101, 110, 116, 115, 46, 10, 10, 
+    32, 32, 101, 46, 32, 69, 120, 99, 101, 112, 116, 105, 111, 110, 115, 32, 97, 110, 
+    100, 32, 76, 105, 109, 105, 116, 97, 116, 105, 111, 110, 115, 32, 109, 101, 97, 110, 
+    115, 32, 102, 97, 105, 114, 32, 117, 115, 101, 44, 32, 102, 97, 105, 114, 32, 100, 
+    101, 97, 108, 105, 110, 103, 44, 32, 97, 110, 100, 47, 111, 114, 10, 32, 32, 32, 
+    32, 32, 97, 110, 121, 32, 111, 116, 104, 101, 114, 32, 101, 120, 99, 101, 112, 116, 
+    105, 111, 110, 32, 111, 114, 32, 108, 105, 109, 105, 116, 97, 116, 105, 111, 110, 32, 
+    116, 111, 32, 67, 111, 112, 121, 114, 105, 103, 104, 116, 32, 97, 110, 100, 32, 83, 
+    105, 109, 105, 108, 97, 114, 32, 82, 105, 103, 104, 116, 115, 10, 32, 32, 32, 32, 
+    32, 116, 104, 97, 116, 32, 97, 112, 112, 108, 105, 101, 115, 32, 116, 111, 32, 89, 
+    111, 117, 114, 32, 117, 115, 101, 32, 111, 102, 32, 116, 104, 101, 32, 76, 105, 99, 
+    101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 46, 10, 10, 32, 
+    32, 102, 46, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 
+    105, 97, 108, 32, 109, 101, 97, 110, 115, 32, 116, 104, 101, 32, 97, 114, 116, 105, 
+    115, 116, 105, 99, 32, 111, 114, 32, 108, 105, 116, 101, 114, 97, 114, 121, 32, 119, 
+    111, 114, 107, 44, 32, 100, 97, 116, 97, 98, 97, 115, 101, 44, 10, 32, 32, 32, 
+    32, 32, 111, 114, 32, 111, 116, 104, 101, 114, 32, 109, 97, 116, 101, 114, 105, 97, 
+    108, 32, 116, 111, 32, 119, 104, 105, 99, 104, 32, 116, 104, 101, 32, 76, 105, 99, 
+    101, 110, 115, 111, 114, 32, 97, 112, 112, 108, 105, 101, 100, 32, 116, 104, 105, 115, 
+    32, 80, 117, 98, 108, 105, 99, 10, 32, 32, 32, 32, 32, 76, 105, 99, 101, 110, 
+    115, 101, 46, 10, 10, 32, 32, 103, 46, 32, 76, 105, 99, 101, 110, 115, 101, 100, 
+    32, 82, 105, 103, 104, 116, 115, 32, 109, 101, 97, 110, 115, 32, 116, 104, 101, 32, 
+    114, 105, 103, 104, 116, 115, 32, 103, 114, 97, 110, 116, 101, 100, 32, 116, 111, 32, 
+    89, 111, 117, 32, 115, 117, 98, 106, 101, 99, 116, 32, 116, 111, 32, 116, 104, 101, 
+    10, 32, 32, 32, 32, 32, 116, 101, 114, 109, 115, 32, 97, 110, 100, 32, 99, 111, 
+    110, 100, 105, 116, 105, 111, 110, 115, 32, 111, 102, 32, 116, 104, 105, 115, 32, 80, 
+    117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 44, 32, 119, 104, 105, 
+    99, 104, 32, 97, 114, 101, 32, 108, 105, 109, 105, 116, 101, 100, 32, 116, 111, 10, 
+    32, 32, 32, 32, 32, 97, 108, 108, 32, 67, 111, 112, 121, 114, 105, 103, 104, 116, 
+    32, 97, 110, 100, 32, 83, 105, 109, 105, 108, 97, 114, 32, 82, 105, 103, 104, 116, 
+    115, 32, 116, 104, 97, 116, 32, 97, 112, 112, 108, 121, 32, 116, 111, 32, 89, 111, 
+    117, 114, 32, 117, 115, 101, 32, 111, 102, 32, 116, 104, 101, 10, 32, 32, 32, 32, 
+    32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 
+    32, 97, 110, 100, 32, 116, 104, 97, 116, 32, 116, 104, 101, 32, 76, 105, 99, 101, 
+    110, 115, 111, 114, 32, 104, 97, 115, 32, 97, 117, 116, 104, 111, 114, 105, 116, 121, 
+    32, 116, 111, 32, 108, 105, 99, 101, 110, 115, 101, 46, 10, 10, 32, 32, 104, 46, 
+    32, 76, 105, 99, 101, 110, 115, 111, 114, 32, 109, 101, 97, 110, 115, 32, 116, 104, 
+    101, 32, 105, 110, 100, 105, 118, 105, 100, 117, 97, 108, 40, 115, 41, 32, 111, 114, 
+    32, 101, 110, 116, 105, 116, 121, 40, 105, 101, 115, 41, 32, 103, 114, 97, 110, 116, 
+    105, 110, 103, 32, 114, 105, 103, 104, 116, 115, 10, 32, 32, 32, 32, 32, 117, 110, 
+    100, 101, 114, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 
+    99, 101, 110, 115, 101, 46, 10, 10, 32, 32, 105, 46, 32, 78, 111, 110, 67, 111, 
+    109, 109, 101, 114, 99, 105, 97, 108, 32, 109, 101, 97, 110, 115, 32, 110, 111, 116, 
+    32, 112, 114, 105, 109, 97, 114, 105, 108, 121, 32, 105, 110, 116, 101, 110, 100, 101, 
+    100, 32, 102, 111, 114, 32, 111, 114, 32, 100, 105, 114, 101, 99, 116, 101, 100, 32, 
+    116, 111, 119, 97, 114, 100, 115, 10, 32, 32, 32, 32, 32, 99, 111, 109, 109, 101, 
+    114, 99, 105, 97, 108, 32, 97, 100, 118, 97, 110, 116, 97, 103, 101, 32, 111, 114, 
+    32, 109, 111, 110, 101, 116, 97, 114, 121, 32, 99, 111, 109, 112, 101, 110, 115, 97, 
+    116, 105, 111, 110, 46, 32, 70, 111, 114, 32, 112, 117, 114, 112, 111, 115, 101, 115, 
+    32, 111, 102, 10, 32, 32, 32, 32, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 
+    105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 44, 32, 116, 104, 101, 32, 101, 120, 
+    99, 104, 97, 110, 103, 101, 32, 111, 102, 32, 116, 104, 101, 32, 76, 105, 99, 101, 
+    110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 32, 102, 111, 114, 10, 
+    32, 32, 32, 32, 32, 111, 116, 104, 101, 114, 32, 109, 97, 116, 101, 114, 105, 97, 
+    108, 32, 115, 117, 98, 106, 101, 99, 116, 32, 116, 111, 32, 67, 111, 112, 121, 114, 
+    105, 103, 104, 116, 32, 97, 110, 100, 32, 83, 105, 109, 105, 108, 97, 114, 32, 82, 
+    105, 103, 104, 116, 115, 32, 98, 121, 32, 100, 105, 103, 105, 116, 97, 108, 10, 32, 
+    32, 32, 32, 32, 102, 105, 108, 101, 45, 115, 104, 97, 114, 105, 110, 103, 32, 111, 
+    114, 32, 115, 105, 109, 105, 108, 97, 114, 32, 109, 101, 97, 110, 115, 32, 105, 115, 
+    32, 78, 111, 110, 67, 111, 109, 109, 101, 114, 99, 105, 97, 108, 32, 112, 114, 111, 
+    118, 105, 100, 101, 100, 32, 116, 104, 101, 114, 101, 32, 105, 115, 10, 32, 32, 32, 
+    32, 32, 110, 111, 32, 112, 97, 121, 109, 101, 110, 116, 32, 111, 102, 32, 109, 111, 
+    110, 101, 116, 97, 114, 121, 32, 99, 111, 109, 112, 101, 110, 115, 97, 116, 105, 111, 
+    110, 32, 105, 110, 32, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 32, 119, 105, 
+    116, 104, 32, 116, 104, 101, 10, 32, 32, 32, 32, 32, 101, 120, 99, 104, 97, 110, 
+    103, 101, 46, 10, 10, 32, 32, 106, 46, 32, 83, 104, 97, 114, 101, 32, 109, 101, 
+    97, 110, 115, 32, 116, 111, 32, 112, 114, 111, 118, 105, 100, 101, 32, 109, 97, 116, 
+    101, 114, 105, 97, 108, 32, 116, 111, 32, 116, 104, 101, 32, 112, 117, 98, 108, 105, 
+    99, 32, 98, 121, 32, 97, 110, 121, 32, 109, 101, 97, 110, 115, 32, 111, 114, 10, 
+    32, 32, 32, 32, 32, 112, 114, 111, 99, 101, 115, 115, 32, 116, 104, 97, 116, 32, 
+    114, 101, 113, 117, 105, 114, 101, 115, 32, 112, 101, 114, 109, 105, 115, 115, 105, 111, 
+    110, 32, 117, 110, 100, 101, 114, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 
+    101, 100, 32, 82, 105, 103, 104, 116, 115, 44, 32, 115, 117, 99, 104, 10, 32, 32, 
+    32, 32, 32, 97, 115, 32, 114, 101, 112, 114, 111, 100, 117, 99, 116, 105, 111, 110, 
+    44, 32, 112, 117, 98, 108, 105, 99, 32, 100, 105, 115, 112, 108, 97, 121, 44, 32, 
+    112, 117, 98, 108, 105, 99, 32, 112, 101, 114, 102, 111, 114, 109, 97, 110, 99, 101, 
+    44, 32, 100, 105, 115, 116, 114, 105, 98, 117, 116, 105, 111, 110, 44, 10, 32, 32, 
+    32, 32, 32, 100, 105, 115, 115, 101, 109, 105, 110, 97, 116, 105, 111, 110, 44, 32, 
+    99, 111, 109, 109, 117, 110, 105, 99, 97, 116, 105, 111, 110, 44, 32, 111, 114, 32, 
+    105, 109, 112, 111, 114, 116, 97, 116, 105, 111, 110, 44, 32, 97, 110, 100, 32, 116, 
+    111, 32, 109, 97, 107, 101, 32, 109, 97, 116, 101, 114, 105, 97, 108, 10, 32, 32, 
+    32, 32, 32, 97, 118, 97, 105, 108, 97, 98, 108, 101, 32, 116, 111, 32, 116, 104, 
+    101, 32, 112, 117, 98, 108, 105, 99, 32, 105, 110, 99, 108, 117, 100, 105, 110, 103, 
+    32, 105, 110, 32, 119, 97, 121, 115, 32, 116, 104, 97, 116, 32, 109, 101, 109, 98, 
+    101, 114, 115, 32, 111, 102, 32, 116, 104, 101, 10, 32, 32, 32, 32, 32, 112, 117, 
+    98, 108, 105, 99, 32, 109, 97, 121, 32, 97, 99, 99, 101, 115, 115, 32, 116, 104, 
+    101, 32, 109, 97, 116, 101, 114, 105, 97, 108, 32, 102, 114, 111, 109, 32, 97, 32, 
+    112, 108, 97, 99, 101, 32, 97, 110, 100, 32, 97, 116, 32, 97, 32, 116, 105, 109, 
+    101, 10, 32, 32, 32, 32, 32, 105, 110, 100, 105, 118, 105, 100, 117, 97, 108, 108, 
+    121, 32, 99, 104, 111, 115, 101, 110, 32, 98, 121, 32, 116, 104, 101, 109, 46, 10, 
+    10, 32, 32, 107, 46, 32, 83, 117, 105, 32, 71, 101, 110, 101, 114, 105, 115, 32, 
+    68, 97, 116, 97, 98, 97, 115, 101, 32, 82, 105, 103, 104, 116, 115, 32, 109, 101, 
+    97, 110, 115, 32, 114, 105, 103, 104, 116, 115, 32, 111, 116, 104, 101, 114, 32, 116, 
+    104, 97, 110, 32, 99, 111, 112, 121, 114, 105, 103, 104, 116, 10, 32, 32, 32, 32, 
+    32, 114, 101, 115, 117, 108, 116, 105, 110, 103, 32, 102, 114, 111, 109, 32, 68, 105, 
+    114, 101, 99, 116, 105, 118, 101, 32, 57, 54, 47, 57, 47, 69, 67, 32, 111, 102, 
+    32, 116, 104, 101, 32, 69, 117, 114, 111, 112, 101, 97, 110, 32, 80, 97, 114, 108, 
+    105, 97, 109, 101, 110, 116, 32, 97, 110, 100, 32, 111, 102, 10, 32, 32, 32, 32, 
+    32, 116, 104, 101, 32, 67, 111, 117, 110, 99, 105, 108, 32, 111, 102, 32, 49, 49, 
+    32, 77, 97, 114, 99, 104, 32, 49, 57, 57, 54, 32, 111, 110, 32, 116, 104, 101, 
+    32, 108, 101, 103, 97, 108, 32, 112, 114, 111, 116, 101, 99, 116, 105, 111, 110, 32, 
+    111, 102, 32, 100, 97, 116, 97, 98, 97, 115, 101, 115, 44, 10, 32, 32, 32, 32, 
+    32, 97, 115, 32, 97, 109, 101, 110, 100, 101, 100, 32, 97, 110, 100, 47, 111, 114, 
+    32, 115, 117, 99, 99, 101, 101, 100, 101, 100, 44, 32, 97, 115, 32, 119, 101, 108, 
+    108, 32, 97, 115, 32, 111, 116, 104, 101, 114, 32, 101, 115, 115, 101, 110, 116, 105, 
+    97, 108, 108, 121, 10, 32, 32, 32, 32, 32, 101, 113, 117, 105, 118, 97, 108, 101, 
+    110, 116, 32, 114, 105, 103, 104, 116, 115, 32, 97, 110, 121, 119, 104, 101, 114, 101, 
+    32, 105, 110, 32, 116, 104, 101, 32, 119, 111, 114, 108, 100, 46, 10, 10, 32, 32, 
+    108, 46, 32, 89, 111, 117, 32, 109, 101, 97, 110, 115, 32, 116, 104, 101, 32, 105, 
+    110, 100, 105, 118, 105, 100, 117, 97, 108, 32, 111, 114, 32, 101, 110, 116, 105, 116, 
+    121, 32, 101, 120, 101, 114, 99, 105, 115, 105, 110, 103, 32, 116, 104, 101, 32, 76, 
+    105, 99, 101, 110, 115, 101, 100, 32, 82, 105, 103, 104, 116, 115, 10, 32, 32, 32, 
+    32, 32, 117, 110, 100, 101, 114, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 
+    99, 32, 76, 105, 99, 101, 110, 115, 101, 46, 32, 89, 111, 117, 114, 32, 104, 97, 
+    115, 32, 97, 32, 99, 111, 114, 114, 101, 115, 112, 111, 110, 100, 105, 110, 103, 32, 
+    109, 101, 97, 110, 105, 110, 103, 46, 10, 10, 10, 83, 101, 99, 116, 105, 111, 110, 
+    32, 50, 32, 45, 45, 32, 83, 99, 111, 112, 101, 46, 10, 10, 32, 32, 97, 46, 
+    32, 76, 105, 99, 101, 110, 115, 101, 32, 103, 114, 97, 110, 116, 46, 10, 10, 32, 
+    32, 32, 32, 32, 32, 32, 49, 46, 32, 83, 117, 98, 106, 101, 99, 116, 32, 116, 
+    111, 32, 116, 104, 101, 32, 116, 101, 114, 109, 115, 32, 97, 110, 100, 32, 99, 111, 
+    110, 100, 105, 116, 105, 111, 110, 115, 32, 111, 102, 32, 116, 104, 105, 115, 32, 80, 
+    117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 44, 10, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 111, 
+    114, 32, 104, 101, 114, 101, 98, 121, 32, 103, 114, 97, 110, 116, 115, 32, 89, 111, 
+    117, 32, 97, 32, 119, 111, 114, 108, 100, 119, 105, 100, 101, 44, 32, 114, 111, 121, 
+    97, 108, 116, 121, 45, 102, 114, 101, 101, 44, 10, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 110, 111, 110, 45, 115, 117, 98, 108, 105, 99, 101, 110, 115, 97, 98, 
+    108, 101, 44, 32, 110, 111, 110, 45, 101, 120, 99, 108, 117, 115, 105, 118, 101, 44, 
+    32, 105, 114, 114, 101, 118, 111, 99, 97, 98, 108, 101, 32, 108, 105, 99, 101, 110, 
+    115, 101, 32, 116, 111, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 101, 120, 
+    101, 114, 99, 105, 115, 101, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 
+    100, 32, 82, 105, 103, 104, 116, 115, 32, 105, 110, 32, 116, 104, 101, 32, 76, 105, 
+    99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 32, 116, 111, 
+    58, 10, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 97, 46, 32, 
+    114, 101, 112, 114, 111, 100, 117, 99, 101, 32, 97, 110, 100, 32, 83, 104, 97, 114, 
+    101, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 
+    101, 114, 105, 97, 108, 44, 32, 105, 110, 32, 119, 104, 111, 108, 101, 32, 111, 114, 
+    10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 105, 110, 
+    32, 112, 97, 114, 116, 44, 32, 102, 111, 114, 32, 78, 111, 110, 67, 111, 109, 109, 
+    101, 114, 99, 105, 97, 108, 32, 112, 117, 114, 112, 111, 115, 101, 115, 32, 111, 110, 
+    108, 121, 59, 32, 97, 110, 100, 10, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 98, 46, 32, 112, 114, 111, 100, 117, 99, 101, 44, 32, 114, 101, 112, 
+    114, 111, 100, 117, 99, 101, 44, 32, 97, 110, 100, 32, 83, 104, 97, 114, 101, 32, 
+    65, 100, 97, 112, 116, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 32, 102, 
+    111, 114, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    78, 111, 110, 67, 111, 109, 109, 101, 114, 99, 105, 97, 108, 32, 112, 117, 114, 112, 
+    111, 115, 101, 115, 32, 111, 110, 108, 121, 46, 10, 10, 32, 32, 32, 32, 32, 32, 
+    32, 50, 46, 32, 69, 120, 99, 101, 112, 116, 105, 111, 110, 115, 32, 97, 110, 100, 
+    32, 76, 105, 109, 105, 116, 97, 116, 105, 111, 110, 115, 46, 32, 70, 111, 114, 32, 
+    116, 104, 101, 32, 97, 118, 111, 105, 100, 97, 110, 99, 101, 32, 111, 102, 32, 100, 
+    111, 117, 98, 116, 44, 32, 119, 104, 101, 114, 101, 10, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 69, 120, 99, 101, 112, 116, 105, 111, 110, 115, 32, 97, 110, 100, 
+    32, 76, 105, 109, 105, 116, 97, 116, 105, 111, 110, 115, 32, 97, 112, 112, 108, 121, 
+    32, 116, 111, 32, 89, 111, 117, 114, 32, 117, 115, 101, 44, 32, 116, 104, 105, 115, 
+    32, 80, 117, 98, 108, 105, 99, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    76, 105, 99, 101, 110, 115, 101, 32, 100, 111, 101, 115, 32, 110, 111, 116, 32, 97, 
+    112, 112, 108, 121, 44, 32, 97, 110, 100, 32, 89, 111, 117, 32, 100, 111, 32, 110, 
+    111, 116, 32, 110, 101, 101, 100, 32, 116, 111, 32, 99, 111, 109, 112, 108, 121, 32, 
+    119, 105, 116, 104, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 105, 116, 115, 
+    32, 116, 101, 114, 109, 115, 32, 97, 110, 100, 32, 99, 111, 110, 100, 105, 116, 105, 
+    111, 110, 115, 46, 10, 10, 32, 32, 32, 32, 32, 32, 32, 51, 46, 32, 84, 101, 
+    114, 109, 46, 32, 84, 104, 101, 32, 116, 101, 114, 109, 32, 111, 102, 32, 116, 104, 
+    105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 32, 
+    105, 115, 32, 115, 112, 101, 99, 105, 102, 105, 101, 100, 32, 105, 110, 32, 83, 101, 
+    99, 116, 105, 111, 110, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 54, 40, 
+    97, 41, 46, 10, 10, 32, 32, 32, 32, 32, 32, 32, 52, 46, 32, 77, 101, 100, 
+    105, 97, 32, 97, 110, 100, 32, 102, 111, 114, 109, 97, 116, 115, 59, 32, 116, 101, 
+    99, 104, 110, 105, 99, 97, 108, 32, 109, 111, 100, 105, 102, 105, 99, 97, 116, 105, 
+    111, 110, 115, 32, 97, 108, 108, 111, 119, 101, 100, 46, 32, 84, 104, 101, 10, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 76, 105, 99, 101, 110, 115, 111, 114, 32, 
+    97, 117, 116, 104, 111, 114, 105, 122, 101, 115, 32, 89, 111, 117, 32, 116, 111, 32, 
+    101, 120, 101, 114, 99, 105, 115, 101, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 
+    115, 101, 100, 32, 82, 105, 103, 104, 116, 115, 32, 105, 110, 10, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 97, 108, 108, 32, 109, 101, 100, 105, 97, 32, 97, 110, 
+    100, 32, 102, 111, 114, 109, 97, 116, 115, 32, 119, 104, 101, 116, 104, 101, 114, 32, 
+    110, 111, 119, 32, 107, 110, 111, 119, 110, 32, 111, 114, 32, 104, 101, 114, 101, 97, 
+    102, 116, 101, 114, 32, 99, 114, 101, 97, 116, 101, 100, 44, 10, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 97, 110, 100, 32, 116, 111, 32, 109, 97, 107, 101, 32, 
+    116, 101, 99, 104, 110, 105, 99, 97, 108, 32, 109, 111, 100, 105, 102, 105, 99, 97, 
+    116, 105, 111, 110, 115, 32, 110, 101, 99, 101, 115, 115, 97, 114, 121, 32, 116, 111, 
+    32, 100, 111, 32, 115, 111, 46, 32, 84, 104, 101, 10, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 76, 105, 99, 101, 110, 115, 111, 114, 32, 119, 97, 105, 118, 101, 
+    115, 32, 97, 110, 100, 47, 111, 114, 32, 97, 103, 114, 101, 101, 115, 32, 110, 111, 
+    116, 32, 116, 111, 32, 97, 115, 115, 101, 114, 116, 32, 97, 110, 121, 32, 114, 105, 
+    103, 104, 116, 32, 111, 114, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 97, 
+    117, 116, 104, 111, 114, 105, 116, 121, 32, 116, 111, 32, 102, 111, 114, 98, 105, 100, 
+    32, 89, 111, 117, 32, 102, 114, 111, 109, 32, 109, 97, 107, 105, 110, 103, 32, 116, 
+    101, 99, 104, 110, 105, 99, 97, 108, 32, 109, 111, 100, 105, 102, 105, 99, 97, 116, 
+    105, 111, 110, 115, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 110, 101, 99, 
+    101, 115, 115, 97, 114, 121, 32, 116, 111, 32, 101, 120, 101, 114, 99, 105, 115, 101, 
+    32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 82, 105, 103, 104, 
+    116, 115, 44, 32, 105, 110, 99, 108, 117, 100, 105, 110, 103, 10, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 116, 101, 99, 104, 110, 105, 99, 97, 108, 32, 109, 111, 
+    100, 105, 102, 105, 99, 97, 116, 105, 111, 110, 115, 32, 110, 101, 99, 101, 115, 115, 
+    97, 114, 121, 32, 116, 111, 32, 99, 105, 114, 99, 117, 109, 118, 101, 110, 116, 32, 
+    69, 102, 102, 101, 99, 116, 105, 118, 101, 10, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 84, 101, 99, 104, 110, 111, 108, 111, 103, 105, 99, 97, 108, 32, 77, 101, 
+    97, 115, 117, 114, 101, 115, 46, 32, 70, 111, 114, 32, 112, 117, 114, 112, 111, 115, 
+    101, 115, 32, 111, 102, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 
+    76, 105, 99, 101, 110, 115, 101, 44, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 115, 105, 109, 112, 108, 121, 32, 109, 97, 107, 105, 110, 103, 32, 109, 111, 100, 
+    105, 102, 105, 99, 97, 116, 105, 111, 110, 115, 32, 97, 117, 116, 104, 111, 114, 105, 
+    122, 101, 100, 32, 98, 121, 32, 116, 104, 105, 115, 32, 83, 101, 99, 116, 105, 111, 
+    110, 32, 50, 40, 97, 41, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 40, 
+    52, 41, 32, 110, 101, 118, 101, 114, 32, 112, 114, 111, 100, 117, 99, 101, 115, 32, 
+    65, 100, 97, 112, 116, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 46, 10, 
+    10, 32, 32, 32, 32, 32, 32, 32, 53, 46, 32, 68, 111, 119, 110, 115, 116, 114, 
+    101, 97, 109, 32, 114, 101, 99, 105, 112, 105, 101, 110, 116, 115, 46, 10, 10, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 97, 46, 32, 79, 102, 102, 101, 
+    114, 32, 102, 114, 111, 109, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 111, 
+    114, 32, 45, 45, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 
+    114, 105, 97, 108, 46, 32, 69, 118, 101, 114, 121, 10, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 114, 101, 99, 105, 112, 105, 101, 110, 116, 
+    32, 111, 102, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 
+    97, 116, 101, 114, 105, 97, 108, 32, 97, 117, 116, 111, 109, 97, 116, 105, 99, 97, 
+    108, 108, 121, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 114, 101, 99, 101, 105, 118, 101, 115, 32, 97, 110, 32, 111, 102, 102, 101, 114, 
+    32, 102, 114, 111, 109, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 111, 114, 
+    32, 116, 111, 32, 101, 120, 101, 114, 99, 105, 115, 101, 32, 116, 104, 101, 10, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 76, 105, 99, 101, 
+    110, 115, 101, 100, 32, 82, 105, 103, 104, 116, 115, 32, 117, 110, 100, 101, 114, 32, 
+    116, 104, 101, 32, 116, 101, 114, 109, 115, 32, 97, 110, 100, 32, 99, 111, 110, 100, 
+    105, 116, 105, 111, 110, 115, 32, 111, 102, 32, 116, 104, 105, 115, 10, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 80, 117, 98, 108, 105, 99, 
+    32, 76, 105, 99, 101, 110, 115, 101, 46, 10, 10, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 98, 46, 32, 78, 111, 32, 100, 111, 119, 110, 115, 116, 114, 
+    101, 97, 109, 32, 114, 101, 115, 116, 114, 105, 99, 116, 105, 111, 110, 115, 46, 32, 
+    89, 111, 117, 32, 109, 97, 121, 32, 110, 111, 116, 32, 111, 102, 102, 101, 114, 32, 
+    111, 114, 32, 105, 109, 112, 111, 115, 101, 10, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 97, 110, 121, 32, 97, 100, 100, 105, 116, 105, 111, 
+    110, 97, 108, 32, 111, 114, 32, 100, 105, 102, 102, 101, 114, 101, 110, 116, 32, 116, 
+    101, 114, 109, 115, 32, 111, 114, 32, 99, 111, 110, 100, 105, 116, 105, 111, 110, 115, 
+    32, 111, 110, 44, 32, 111, 114, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 97, 112, 112, 108, 121, 32, 97, 110, 121, 32, 69, 102, 102, 
+    101, 99, 116, 105, 118, 101, 32, 84, 101, 99, 104, 110, 111, 108, 111, 103, 105, 99, 
+    97, 108, 32, 77, 101, 97, 115, 117, 114, 101, 115, 32, 116, 111, 44, 32, 116, 104, 
+    101, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 76, 
+    105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 32, 105, 
+    102, 32, 100, 111, 105, 110, 103, 32, 115, 111, 32, 114, 101, 115, 116, 114, 105, 99, 
+    116, 115, 32, 101, 120, 101, 114, 99, 105, 115, 101, 32, 111, 102, 32, 116, 104, 101, 
+    10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 76, 105, 
+    99, 101, 110, 115, 101, 100, 32, 82, 105, 103, 104, 116, 115, 32, 98, 121, 32, 97, 
+    110, 121, 32, 114, 101, 99, 105, 112, 105, 101, 110, 116, 32, 111, 102, 32, 116, 104, 
+    101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 10, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 77, 97, 116, 101, 114, 105, 97, 108, 46, 10, 
+    10, 32, 32, 32, 32, 32, 32, 32, 54, 46, 32, 78, 111, 32, 101, 110, 100, 111, 
+    114, 115, 101, 109, 101, 110, 116, 46, 32, 78, 111, 116, 104, 105, 110, 103, 32, 105, 
+    110, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 
+    110, 115, 101, 32, 99, 111, 110, 115, 116, 105, 116, 117, 116, 101, 115, 32, 111, 114, 
+    10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 109, 97, 121, 32, 98, 101, 32, 
+    99, 111, 110, 115, 116, 114, 117, 101, 100, 32, 97, 115, 32, 112, 101, 114, 109, 105, 
+    115, 115, 105, 111, 110, 32, 116, 111, 32, 97, 115, 115, 101, 114, 116, 32, 111, 114, 
+    32, 105, 109, 112, 108, 121, 32, 116, 104, 97, 116, 32, 89, 111, 117, 10, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 97, 114, 101, 44, 32, 111, 114, 32, 116, 104, 
+    97, 116, 32, 89, 111, 117, 114, 32, 117, 115, 101, 32, 111, 102, 32, 116, 104, 101, 
+    32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 
+    32, 105, 115, 44, 32, 99, 111, 110, 110, 101, 99, 116, 101, 100, 10, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 119, 105, 116, 104, 44, 32, 111, 114, 32, 115, 112, 
+    111, 110, 115, 111, 114, 101, 100, 44, 32, 101, 110, 100, 111, 114, 115, 101, 100, 44, 
+    32, 111, 114, 32, 103, 114, 97, 110, 116, 101, 100, 32, 111, 102, 102, 105, 99, 105, 
+    97, 108, 32, 115, 116, 97, 116, 117, 115, 32, 98, 121, 44, 10, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 111, 114, 
+    32, 111, 114, 32, 111, 116, 104, 101, 114, 115, 32, 100, 101, 115, 105, 103, 110, 97, 
+    116, 101, 100, 32, 116, 111, 32, 114, 101, 99, 101, 105, 118, 101, 32, 97, 116, 116, 
+    114, 105, 98, 117, 116, 105, 111, 110, 32, 97, 115, 10, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 112, 114, 111, 118, 105, 100, 101, 100, 32, 105, 110, 32, 83, 101, 
+    99, 116, 105, 111, 110, 32, 51, 40, 97, 41, 40, 49, 41, 40, 65, 41, 40, 105, 
+    41, 46, 10, 10, 32, 32, 98, 46, 32, 79, 116, 104, 101, 114, 32, 114, 105, 103, 
+    104, 116, 115, 46, 10, 10, 32, 32, 32, 32, 32, 32, 32, 49, 46, 32, 77, 111, 
+    114, 97, 108, 32, 114, 105, 103, 104, 116, 115, 44, 32, 115, 117, 99, 104, 32, 97, 
+    115, 32, 116, 104, 101, 32, 114, 105, 103, 104, 116, 32, 111, 102, 32, 105, 110, 116, 
+    101, 103, 114, 105, 116, 121, 44, 32, 97, 114, 101, 32, 110, 111, 116, 10, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 108, 105, 99, 101, 110, 115, 101, 100, 32, 117, 
+    110, 100, 101, 114, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 
+    105, 99, 101, 110, 115, 101, 44, 32, 110, 111, 114, 32, 97, 114, 101, 32, 112, 117, 
+    98, 108, 105, 99, 105, 116, 121, 44, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 112, 114, 105, 118, 97, 99, 121, 44, 32, 97, 110, 100, 47, 111, 114, 32, 111, 
+    116, 104, 101, 114, 32, 115, 105, 109, 105, 108, 97, 114, 32, 112, 101, 114, 115, 111, 
+    110, 97, 108, 105, 116, 121, 32, 114, 105, 103, 104, 116, 115, 59, 32, 104, 111, 119, 
+    101, 118, 101, 114, 44, 32, 116, 111, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 116, 104, 101, 32, 101, 120, 116, 101, 110, 116, 32, 112, 111, 115, 115, 105, 98, 
+    108, 101, 44, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 111, 114, 32, 119, 
+    97, 105, 118, 101, 115, 32, 97, 110, 100, 47, 111, 114, 32, 97, 103, 114, 101, 101, 
+    115, 32, 110, 111, 116, 32, 116, 111, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 97, 115, 115, 101, 114, 116, 32, 97, 110, 121, 32, 115, 117, 99, 104, 32, 114, 
+    105, 103, 104, 116, 115, 32, 104, 101, 108, 100, 32, 98, 121, 32, 116, 104, 101, 32, 
+    76, 105, 99, 101, 110, 115, 111, 114, 32, 116, 111, 32, 116, 104, 101, 32, 108, 105, 
+    109, 105, 116, 101, 100, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 101, 120, 
+    116, 101, 110, 116, 32, 110, 101, 99, 101, 115, 115, 97, 114, 121, 32, 116, 111, 32, 
+    97, 108, 108, 111, 119, 32, 89, 111, 117, 32, 116, 111, 32, 101, 120, 101, 114, 99, 
+    105, 115, 101, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 10, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 82, 105, 103, 104, 116, 115, 44, 32, 98, 
+    117, 116, 32, 110, 111, 116, 32, 111, 116, 104, 101, 114, 119, 105, 115, 101, 46, 10, 
+    10, 32, 32, 32, 32, 32, 32, 32, 50, 46, 32, 80, 97, 116, 101, 110, 116, 32, 
+    97, 110, 100, 32, 116, 114, 97, 100, 101, 109, 97, 114, 107, 32, 114, 105, 103, 104, 
+    116, 115, 32, 97, 114, 101, 32, 110, 111, 116, 32, 108, 105, 99, 101, 110, 115, 101, 
+    100, 32, 117, 110, 100, 101, 114, 32, 116, 104, 105, 115, 10, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 
+    101, 46, 10, 10, 32, 32, 32, 32, 32, 32, 32, 51, 46, 32, 84, 111, 32, 116, 
+    104, 101, 32, 101, 120, 116, 101, 110, 116, 32, 112, 111, 115, 115, 105, 98, 108, 101, 
+    44, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 111, 114, 32, 119, 97, 105, 
+    118, 101, 115, 32, 97, 110, 121, 32, 114, 105, 103, 104, 116, 32, 116, 111, 10, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 99, 111, 108, 108, 101, 99, 116, 32, 114, 
+    111, 121, 97, 108, 116, 105, 101, 115, 32, 102, 114, 111, 109, 32, 89, 111, 117, 32, 
+    102, 111, 114, 32, 116, 104, 101, 32, 101, 120, 101, 114, 99, 105, 115, 101, 32, 111, 
+    102, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 10, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 82, 105, 103, 104, 116, 115, 44, 32, 119, 104, 101, 
+    116, 104, 101, 114, 32, 100, 105, 114, 101, 99, 116, 108, 121, 32, 111, 114, 32, 116, 
+    104, 114, 111, 117, 103, 104, 32, 97, 32, 99, 111, 108, 108, 101, 99, 116, 105, 110, 
+    103, 32, 115, 111, 99, 105, 101, 116, 121, 10, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 117, 110, 100, 101, 114, 32, 97, 110, 121, 32, 118, 111, 108, 117, 110, 116, 
+    97, 114, 121, 32, 111, 114, 32, 119, 97, 105, 118, 97, 98, 108, 101, 32, 115, 116, 
+    97, 116, 117, 116, 111, 114, 121, 32, 111, 114, 32, 99, 111, 109, 112, 117, 108, 115, 
+    111, 114, 121, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 108, 105, 99, 101, 
+    110, 115, 105, 110, 103, 32, 115, 99, 104, 101, 109, 101, 46, 32, 73, 110, 32, 97, 
+    108, 108, 32, 111, 116, 104, 101, 114, 32, 99, 97, 115, 101, 115, 32, 116, 104, 101, 
+    32, 76, 105, 99, 101, 110, 115, 111, 114, 32, 101, 120, 112, 114, 101, 115, 115, 108, 
+    121, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 114, 101, 115, 101, 114, 118, 
+    101, 115, 32, 97, 110, 121, 32, 114, 105, 103, 104, 116, 32, 116, 111, 32, 99, 111, 
+    108, 108, 101, 99, 116, 32, 115, 117, 99, 104, 32, 114, 111, 121, 97, 108, 116, 105, 
+    101, 115, 44, 32, 105, 110, 99, 108, 117, 100, 105, 110, 103, 32, 119, 104, 101, 110, 
+    10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 116, 104, 101, 32, 76, 105, 99, 
+    101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 32, 105, 115, 32, 
+    117, 115, 101, 100, 32, 111, 116, 104, 101, 114, 32, 116, 104, 97, 110, 32, 102, 111, 
+    114, 32, 78, 111, 110, 67, 111, 109, 109, 101, 114, 99, 105, 97, 108, 10, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 112, 117, 114, 112, 111, 115, 101, 115, 46, 10, 
+    10, 10, 83, 101, 99, 116, 105, 111, 110, 32, 51, 32, 45, 45, 32, 76, 105, 99, 
+    101, 110, 115, 101, 32, 67, 111, 110, 100, 105, 116, 105, 111, 110, 115, 46, 10, 10, 
+    89, 111, 117, 114, 32, 101, 120, 101, 114, 99, 105, 115, 101, 32, 111, 102, 32, 116, 
+    104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 82, 105, 103, 104, 116, 115, 
+    32, 105, 115, 32, 101, 120, 112, 114, 101, 115, 115, 108, 121, 32, 109, 97, 100, 101, 
+    32, 115, 117, 98, 106, 101, 99, 116, 32, 116, 111, 32, 116, 104, 101, 10, 102, 111, 
+    108, 108, 111, 119, 105, 110, 103, 32, 99, 111, 110, 100, 105, 116, 105, 111, 110, 115, 
+    46, 10, 10, 32, 32, 97, 46, 32, 65, 116, 116, 114, 105, 98, 117, 116, 105, 111, 
+    110, 46, 10, 10, 32, 32, 32, 32, 32, 32, 32, 49, 46, 32, 73, 102, 32, 89, 
+    111, 117, 32, 83, 104, 97, 114, 101, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 
+    115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 32, 40, 105, 110, 99, 108, 
+    117, 100, 105, 110, 103, 32, 105, 110, 32, 109, 111, 100, 105, 102, 105, 101, 100, 10, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 102, 111, 114, 109, 41, 44, 32, 89, 
+    111, 117, 32, 109, 117, 115, 116, 58, 10, 10, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 97, 46, 32, 114, 101, 116, 97, 105, 110, 32, 116, 104, 101, 32, 
+    102, 111, 108, 108, 111, 119, 105, 110, 103, 32, 105, 102, 32, 105, 116, 32, 105, 115, 
+    32, 115, 117, 112, 112, 108, 105, 101, 100, 32, 98, 121, 32, 116, 104, 101, 32, 76, 
+    105, 99, 101, 110, 115, 111, 114, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 119, 105, 116, 104, 32, 116, 104, 101, 32, 76, 105, 99, 101, 
+    110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 58, 10, 10, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 105, 46, 32, 
+    105, 100, 101, 110, 116, 105, 102, 105, 99, 97, 116, 105, 111, 110, 32, 111, 102, 32, 
+    116, 104, 101, 32, 99, 114, 101, 97, 116, 111, 114, 40, 115, 41, 32, 111, 102, 32, 
+    116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 10, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 77, 97, 116, 
+    101, 114, 105, 97, 108, 32, 97, 110, 100, 32, 97, 110, 121, 32, 111, 116, 104, 101, 
+    114, 115, 32, 100, 101, 115, 105, 103, 110, 97, 116, 101, 100, 32, 116, 111, 32, 114, 
+    101, 99, 101, 105, 118, 101, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 97, 116, 116, 114, 105, 98, 117, 116, 105, 
+    111, 110, 44, 32, 105, 110, 32, 97, 110, 121, 32, 114, 101, 97, 115, 111, 110, 97, 
+    98, 108, 101, 32, 109, 97, 110, 110, 101, 114, 32, 114, 101, 113, 117, 101, 115, 116, 
+    101, 100, 32, 98, 121, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 
+    111, 114, 32, 40, 105, 110, 99, 108, 117, 100, 105, 110, 103, 32, 98, 121, 32, 112, 
+    115, 101, 117, 100, 111, 110, 121, 109, 32, 105, 102, 10, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 100, 101, 115, 105, 
+    103, 110, 97, 116, 101, 100, 41, 59, 10, 10, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 105, 105, 46, 32, 97, 32, 99, 111, 112, 121, 
+    114, 105, 103, 104, 116, 32, 110, 111, 116, 105, 99, 101, 59, 10, 10, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 105, 105, 105, 46, 32, 97, 
+    32, 110, 111, 116, 105, 99, 101, 32, 116, 104, 97, 116, 32, 114, 101, 102, 101, 114, 
+    115, 32, 116, 111, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 
+    105, 99, 101, 110, 115, 101, 59, 10, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 105, 118, 46, 32, 97, 32, 110, 111, 116, 105, 99, 
+    101, 32, 116, 104, 97, 116, 32, 114, 101, 102, 101, 114, 115, 32, 116, 111, 32, 116, 
+    104, 101, 32, 100, 105, 115, 99, 108, 97, 105, 109, 101, 114, 32, 111, 102, 10, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 119, 97, 114, 114, 97, 110, 116, 105, 101, 115, 59, 10, 10, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 118, 46, 32, 97, 32, 
+    85, 82, 73, 32, 111, 114, 32, 104, 121, 112, 101, 114, 108, 105, 110, 107, 32, 116, 
+    111, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 
+    101, 114, 105, 97, 108, 32, 116, 111, 32, 116, 104, 101, 10, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 101, 120, 116, 
+    101, 110, 116, 32, 114, 101, 97, 115, 111, 110, 97, 98, 108, 121, 32, 112, 114, 97, 
+    99, 116, 105, 99, 97, 98, 108, 101, 59, 10, 10, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 98, 46, 32, 105, 110, 100, 105, 99, 97, 116, 101, 32, 105, 
+    102, 32, 89, 111, 117, 32, 109, 111, 100, 105, 102, 105, 101, 100, 32, 116, 104, 101, 
+    32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 
+    32, 97, 110, 100, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 114, 101, 116, 97, 105, 110, 32, 97, 110, 32, 105, 110, 100, 105, 99, 97, 
+    116, 105, 111, 110, 32, 111, 102, 32, 97, 110, 121, 32, 112, 114, 101, 118, 105, 111, 
+    117, 115, 32, 109, 111, 100, 105, 102, 105, 99, 97, 116, 105, 111, 110, 115, 59, 32, 
+    97, 110, 100, 10, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 99, 
+    46, 32, 105, 110, 100, 105, 99, 97, 116, 101, 32, 116, 104, 101, 32, 76, 105, 99, 
+    101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 32, 105, 115, 32, 
+    108, 105, 99, 101, 110, 115, 101, 100, 32, 117, 110, 100, 101, 114, 32, 116, 104, 105, 
+    115, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 80, 
+    117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 44, 32, 97, 110, 100, 
+    32, 105, 110, 99, 108, 117, 100, 101, 32, 116, 104, 101, 32, 116, 101, 120, 116, 32, 
+    111, 102, 44, 32, 111, 114, 32, 116, 104, 101, 32, 85, 82, 73, 32, 111, 114, 10, 
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 104, 121, 112, 
+    101, 114, 108, 105, 110, 107, 32, 116, 111, 44, 32, 116, 104, 105, 115, 32, 80, 117, 
+    98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 46, 10, 10, 32, 32, 32, 
+    32, 32, 32, 32, 50, 46, 32, 89, 111, 117, 32, 109, 97, 121, 32, 115, 97, 116, 
+    105, 115, 102, 121, 32, 116, 104, 101, 32, 99, 111, 110, 100, 105, 116, 105, 111, 110, 
+    115, 32, 105, 110, 32, 83, 101, 99, 116, 105, 111, 110, 32, 51, 40, 97, 41, 40, 
+    49, 41, 32, 105, 110, 32, 97, 110, 121, 10, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 114, 101, 97, 115, 111, 110, 97, 98, 108, 101, 32, 109, 97, 110, 110, 101, 
+    114, 32, 98, 97, 115, 101, 100, 32, 111, 110, 32, 116, 104, 101, 32, 109, 101, 100, 
+    105, 117, 109, 44, 32, 109, 101, 97, 110, 115, 44, 32, 97, 110, 100, 32, 99, 111, 
+    110, 116, 101, 120, 116, 32, 105, 110, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 119, 104, 105, 99, 104, 32, 89, 111, 117, 32, 83, 104, 97, 114, 101, 32, 116, 
+    104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 
+    97, 108, 46, 32, 70, 111, 114, 32, 101, 120, 97, 109, 112, 108, 101, 44, 32, 105, 
+    116, 32, 109, 97, 121, 32, 98, 101, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 114, 101, 97, 115, 111, 110, 97, 98, 108, 101, 32, 116, 111, 32, 115, 97, 116, 
+    105, 115, 102, 121, 32, 116, 104, 101, 32, 99, 111, 110, 100, 105, 116, 105, 111, 110, 
+    115, 32, 98, 121, 32, 112, 114, 111, 118, 105, 100, 105, 110, 103, 32, 97, 32, 85, 
+    82, 73, 32, 111, 114, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 104, 121, 
+    112, 101, 114, 108, 105, 110, 107, 32, 116, 111, 32, 97, 32, 114, 101, 115, 111, 117, 
+    114, 99, 101, 32, 116, 104, 97, 116, 32, 105, 110, 99, 108, 117, 100, 101, 115, 32, 
+    116, 104, 101, 32, 114, 101, 113, 117, 105, 114, 101, 100, 10, 32, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 105, 110, 102, 111, 114, 109, 97, 116, 105, 111, 110, 46, 10, 
+    10, 32, 32, 32, 32, 32, 32, 32, 51, 46, 32, 73, 102, 32, 114, 101, 113, 117, 
+    101, 115, 116, 101, 100, 32, 98, 121, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 
+    115, 111, 114, 44, 32, 89, 111, 117, 32, 109, 117, 115, 116, 32, 114, 101, 109, 111, 
+    118, 101, 32, 97, 110, 121, 32, 111, 102, 32, 116, 104, 101, 10, 32, 32, 32, 32, 
+    32, 32, 32, 32, 32, 32, 105, 110, 102, 111, 114, 109, 97, 116, 105, 111, 110, 32, 
+    114, 101, 113, 117, 105, 114, 101, 100, 32, 98, 121, 32, 83, 101, 99, 116, 105, 111, 
+    110, 32, 51, 40, 97, 41, 40, 49, 41, 40, 65, 41, 32, 116, 111, 32, 116, 104, 
+    101, 32, 101, 120, 116, 101, 110, 116, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+    32, 114, 101, 97, 115, 111, 110, 97, 98, 108, 121, 32, 112, 114, 97, 99, 116, 105, 
+    99, 97, 98, 108, 101, 46, 10, 10, 32, 32, 32, 32, 32, 32, 32, 52, 46, 32, 
+    73, 102, 32, 89, 111, 117, 32, 83, 104, 97, 114, 101, 32, 65, 100, 97, 112, 116, 
+    101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 32, 89, 111, 117, 32, 112, 114, 
+    111, 100, 117, 99, 101, 44, 32, 116, 104, 101, 32, 65, 100, 97, 112, 116, 101, 114, 
+    39, 115, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 76, 105, 99, 101, 110, 
+    115, 101, 32, 89, 111, 117, 32, 97, 112, 112, 108, 121, 32, 109, 117, 115, 116, 32, 
+    110, 111, 116, 32, 112, 114, 101, 118, 101, 110, 116, 32, 114, 101, 99, 105, 112, 105, 
+    101, 110, 116, 115, 32, 111, 102, 32, 116, 104, 101, 32, 65, 100, 97, 112, 116, 101, 
+    100, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 77, 97, 116, 101, 114, 105, 
+    97, 108, 32, 102, 114, 111, 109, 32, 99, 111, 109, 112, 108, 121, 105, 110, 103, 32, 
+    119, 105, 116, 104, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 
+    105, 99, 101, 110, 115, 101, 46, 10, 10, 10, 83, 101, 99, 116, 105, 111, 110, 32, 
+    52, 32, 45, 45, 32, 83, 117, 105, 32, 71, 101, 110, 101, 114, 105, 115, 32, 68, 
+    97, 116, 97, 98, 97, 115, 101, 32, 82, 105, 103, 104, 116, 115, 46, 10, 10, 87, 
+    104, 101, 114, 101, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 
+    82, 105, 103, 104, 116, 115, 32, 105, 110, 99, 108, 117, 100, 101, 32, 83, 117, 105, 
+    32, 71, 101, 110, 101, 114, 105, 115, 32, 68, 97, 116, 97, 98, 97, 115, 101, 32, 
+    82, 105, 103, 104, 116, 115, 32, 116, 104, 97, 116, 10, 97, 112, 112, 108, 121, 32, 
+    116, 111, 32, 89, 111, 117, 114, 32, 117, 115, 101, 32, 111, 102, 32, 116, 104, 101, 
+    32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 
+    58, 10, 10, 32, 32, 97, 46, 32, 102, 111, 114, 32, 116, 104, 101, 32, 97, 118, 
+    111, 105, 100, 97, 110, 99, 101, 32, 111, 102, 32, 100, 111, 117, 98, 116, 44, 32, 
+    83, 101, 99, 116, 105, 111, 110, 32, 50, 40, 97, 41, 40, 49, 41, 32, 103, 114, 
+    97, 110, 116, 115, 32, 89, 111, 117, 32, 116, 104, 101, 32, 114, 105, 103, 104, 116, 
+    10, 32, 32, 32, 32, 32, 116, 111, 32, 101, 120, 116, 114, 97, 99, 116, 44, 32, 
+    114, 101, 117, 115, 101, 44, 32, 114, 101, 112, 114, 111, 100, 117, 99, 101, 44, 32, 
+    97, 110, 100, 32, 83, 104, 97, 114, 101, 32, 97, 108, 108, 32, 111, 114, 32, 97, 
+    32, 115, 117, 98, 115, 116, 97, 110, 116, 105, 97, 108, 10, 32, 32, 32, 32, 32, 
+    112, 111, 114, 116, 105, 111, 110, 32, 111, 102, 32, 116, 104, 101, 32, 99, 111, 110, 
+    116, 101, 110, 116, 115, 32, 111, 102, 32, 116, 104, 101, 32, 100, 97, 116, 97, 98, 
+    97, 115, 101, 32, 102, 111, 114, 32, 78, 111, 110, 67, 111, 109, 109, 101, 114, 99, 
+    105, 97, 108, 32, 112, 117, 114, 112, 111, 115, 101, 115, 10, 32, 32, 32, 32, 32, 
+    111, 110, 108, 121, 59, 10, 10, 32, 32, 98, 46, 32, 105, 102, 32, 89, 111, 117, 
+    32, 105, 110, 99, 108, 117, 100, 101, 32, 97, 108, 108, 32, 111, 114, 32, 97, 32, 
+    115, 117, 98, 115, 116, 97, 110, 116, 105, 97, 108, 32, 112, 111, 114, 116, 105, 111, 
+    110, 32, 111, 102, 32, 116, 104, 101, 32, 100, 97, 116, 97, 98, 97, 115, 101, 10, 
+    32, 32, 32, 32, 32, 99, 111, 110, 116, 101, 110, 116, 115, 32, 105, 110, 32, 97, 
+    32, 100, 97, 116, 97, 98, 97, 115, 101, 32, 105, 110, 32, 119, 104, 105, 99, 104, 
+    32, 89, 111, 117, 32, 104, 97, 118, 101, 32, 83, 117, 105, 32, 71, 101, 110, 101, 
+    114, 105, 115, 32, 68, 97, 116, 97, 98, 97, 115, 101, 10, 32, 32, 32, 32, 32, 
+    82, 105, 103, 104, 116, 115, 44, 32, 116, 104, 101, 110, 32, 116, 104, 101, 32, 100, 
+    97, 116, 97, 98, 97, 115, 101, 32, 105, 110, 32, 119, 104, 105, 99, 104, 32, 89, 
+    111, 117, 32, 104, 97, 118, 101, 32, 83, 117, 105, 32, 71, 101, 110, 101, 114, 105, 
+    115, 32, 68, 97, 116, 97, 98, 97, 115, 101, 10, 32, 32, 32, 32, 32, 82, 105, 
+    103, 104, 116, 115, 32, 40, 98, 117, 116, 32, 110, 111, 116, 32, 105, 116, 115, 32, 
+    105, 110, 100, 105, 118, 105, 100, 117, 97, 108, 32, 99, 111, 110, 116, 101, 110, 116, 
+    115, 41, 32, 105, 115, 32, 65, 100, 97, 112, 116, 101, 100, 32, 77, 97, 116, 101, 
+    114, 105, 97, 108, 59, 32, 97, 110, 100, 10, 10, 32, 32, 99, 46, 32, 89, 111, 
+    117, 32, 109, 117, 115, 116, 32, 99, 111, 109, 112, 108, 121, 32, 119, 105, 116, 104, 
+    32, 116, 104, 101, 32, 99, 111, 110, 100, 105, 116, 105, 111, 110, 115, 32, 105, 110, 
+    32, 83, 101, 99, 116, 105, 111, 110, 32, 51, 40, 97, 41, 32, 105, 102, 32, 89, 
+    111, 117, 32, 83, 104, 97, 114, 101, 10, 32, 32, 32, 32, 32, 97, 108, 108, 32, 
+    111, 114, 32, 97, 32, 115, 117, 98, 115, 116, 97, 110, 116, 105, 97, 108, 32, 112, 
+    111, 114, 116, 105, 111, 110, 32, 111, 102, 32, 116, 104, 101, 32, 99, 111, 110, 116, 
+    101, 110, 116, 115, 32, 111, 102, 32, 116, 104, 101, 32, 100, 97, 116, 97, 98, 97, 
+    115, 101, 46, 10, 10, 70, 111, 114, 32, 116, 104, 101, 32, 97, 118, 111, 105, 100, 
+    97, 110, 99, 101, 32, 111, 102, 32, 100, 111, 117, 98, 116, 44, 32, 116, 104, 105, 
+    115, 32, 83, 101, 99, 116, 105, 111, 110, 32, 52, 32, 115, 117, 112, 112, 108, 101, 
+    109, 101, 110, 116, 115, 32, 97, 110, 100, 32, 100, 111, 101, 115, 32, 110, 111, 116, 
+    10, 114, 101, 112, 108, 97, 99, 101, 32, 89, 111, 117, 114, 32, 111, 98, 108, 105, 
+    103, 97, 116, 105, 111, 110, 115, 32, 117, 110, 100, 101, 114, 32, 116, 104, 105, 115, 
+    32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 32, 119, 104, 
+    101, 114, 101, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 10, 82, 
+    105, 103, 104, 116, 115, 32, 105, 110, 99, 108, 117, 100, 101, 32, 111, 116, 104, 101, 
+    114, 32, 67, 111, 112, 121, 114, 105, 103, 104, 116, 32, 97, 110, 100, 32, 83, 105, 
+    109, 105, 108, 97, 114, 32, 82, 105, 103, 104, 116, 115, 46, 10, 10, 10, 83, 101, 
+    99, 116, 105, 111, 110, 32, 53, 32, 45, 45, 32, 68, 105, 115, 99, 108, 97, 105, 
+    109, 101, 114, 32, 111, 102, 32, 87, 97, 114, 114, 97, 110, 116, 105, 101, 115, 32, 
+    97, 110, 100, 32, 76, 105, 109, 105, 116, 97, 116, 105, 111, 110, 32, 111, 102, 32, 
+    76, 105, 97, 98, 105, 108, 105, 116, 121, 46, 10, 10, 32, 32, 97, 46, 32, 85, 
+    78, 76, 69, 83, 83, 32, 79, 84, 72, 69, 82, 87, 73, 83, 69, 32, 83, 69, 
+    80, 65, 82, 65, 84, 69, 76, 89, 32, 85, 78, 68, 69, 82, 84, 65, 75, 69, 
+    78, 32, 66, 89, 32, 84, 72, 69, 32, 76, 73, 67, 69, 78, 83, 79, 82, 44, 
+    32, 84, 79, 32, 84, 72, 69, 10, 32, 32, 32, 32, 32, 69, 88, 84, 69, 78, 
+    84, 32, 80, 79, 83, 83, 73, 66, 76, 69, 44, 32, 84, 72, 69, 32, 76, 73, 
+    67, 69, 78, 83, 79, 82, 32, 79, 70, 70, 69, 82, 83, 32, 84, 72, 69, 32, 
+    76, 73, 67, 69, 78, 83, 69, 68, 32, 77, 65, 84, 69, 82, 73, 65, 76, 32, 
+    65, 83, 45, 73, 83, 10, 32, 32, 32, 32, 32, 65, 78, 68, 32, 65, 83, 45, 
+    65, 86, 65, 73, 76, 65, 66, 76, 69, 44, 32, 65, 78, 68, 32, 77, 65, 75, 
+    69, 83, 32, 78, 79, 32, 82, 69, 80, 82, 69, 83, 69, 78, 84, 65, 84, 73, 
+    79, 78, 83, 32, 79, 82, 32, 87, 65, 82, 82, 65, 78, 84, 73, 69, 83, 32, 
+    79, 70, 10, 32, 32, 32, 32, 32, 65, 78, 89, 32, 75, 73, 78, 68, 32, 67, 
+    79, 78, 67, 69, 82, 78, 73, 78, 71, 32, 84, 72, 69, 32, 76, 73, 67, 69, 
+    78, 83, 69, 68, 32, 77, 65, 84, 69, 82, 73, 65, 76, 44, 32, 87, 72, 69, 
+    84, 72, 69, 82, 32, 69, 88, 80, 82, 69, 83, 83, 44, 10, 32, 32, 32, 32, 
+    32, 73, 77, 80, 76, 73, 69, 68, 44, 32, 83, 84, 65, 84, 85, 84, 79, 82, 
+    89, 44, 32, 79, 82, 32, 79, 84, 72, 69, 82, 46, 32, 84, 72, 73, 83, 32, 
+    73, 78, 67, 76, 85, 68, 69, 83, 44, 32, 87, 73, 84, 72, 79, 85, 84, 32, 
+    76, 73, 77, 73, 84, 65, 84, 73, 79, 78, 44, 10, 32, 32, 32, 32, 32, 87, 
+    65, 82, 82, 65, 78, 84, 73, 69, 83, 32, 79, 70, 32, 84, 73, 84, 76, 69, 
+    44, 32, 77, 69, 82, 67, 72, 65, 78, 84, 65, 66, 73, 76, 73, 84, 89, 44, 
+    32, 70, 73, 84, 78, 69, 83, 83, 32, 70, 79, 82, 32, 65, 32, 80, 65, 82, 
+    84, 73, 67, 85, 76, 65, 82, 10, 32, 32, 32, 32, 32, 80, 85, 82, 80, 79, 
+    83, 69, 44, 32, 78, 79, 78, 45, 73, 78, 70, 82, 73, 78, 71, 69, 77, 69, 
+    78, 84, 44, 32, 65, 66, 83, 69, 78, 67, 69, 32, 79, 70, 32, 76, 65, 84, 
+    69, 78, 84, 32, 79, 82, 32, 79, 84, 72, 69, 82, 32, 68, 69, 70, 69, 67, 
+    84, 83, 44, 10, 32, 32, 32, 32, 32, 65, 67, 67, 85, 82, 65, 67, 89, 44, 
+    32, 79, 82, 32, 84, 72, 69, 32, 80, 82, 69, 83, 69, 78, 67, 69, 32, 79, 
+    82, 32, 65, 66, 83, 69, 78, 67, 69, 32, 79, 70, 32, 69, 82, 82, 79, 82, 
+    83, 44, 32, 87, 72, 69, 84, 72, 69, 82, 32, 79, 82, 32, 78, 79, 84, 10, 
+    32, 32, 32, 32, 32, 75, 78, 79, 87, 78, 32, 79, 82, 32, 68, 73, 83, 67, 
+    79, 86, 69, 82, 65, 66, 76, 69, 46, 32, 87, 72, 69, 82, 69, 32, 68, 73, 
+    83, 67, 76, 65, 73, 77, 69, 82, 83, 32, 79, 70, 32, 87, 65, 82, 82, 65, 
+    78, 84, 73, 69, 83, 32, 65, 82, 69, 32, 78, 79, 84, 10, 32, 32, 32, 32, 
+    32, 65, 76, 76, 79, 87, 69, 68, 32, 73, 78, 32, 70, 85, 76, 76, 32, 79, 
+    82, 32, 73, 78, 32, 80, 65, 82, 84, 44, 32, 84, 72, 73, 83, 32, 68, 73, 
+    83, 67, 76, 65, 73, 77, 69, 82, 32, 77, 65, 89, 32, 78, 79, 84, 32, 65, 
+    80, 80, 76, 89, 32, 84, 79, 32, 89, 79, 85, 46, 10, 10, 32, 32, 98, 46, 
+    32, 84, 79, 32, 84, 72, 69, 32, 69, 88, 84, 69, 78, 84, 32, 80, 79, 83, 
+    83, 73, 66, 76, 69, 44, 32, 73, 78, 32, 78, 79, 32, 69, 86, 69, 78, 84, 
+    32, 87, 73, 76, 76, 32, 84, 72, 69, 32, 76, 73, 67, 69, 78, 83, 79, 82, 
+    32, 66, 69, 32, 76, 73, 65, 66, 76, 69, 10, 32, 32, 32, 32, 32, 84, 79, 
+    32, 89, 79, 85, 32, 79, 78, 32, 65, 78, 89, 32, 76, 69, 71, 65, 76, 32, 
+    84, 72, 69, 79, 82, 89, 32, 40, 73, 78, 67, 76, 85, 68, 73, 78, 71, 44, 
+    32, 87, 73, 84, 72, 79, 85, 84, 32, 76, 73, 77, 73, 84, 65, 84, 73, 79, 
+    78, 44, 10, 32, 32, 32, 32, 32, 78, 69, 71, 76, 73, 71, 69, 78, 67, 69, 
+    41, 32, 79, 82, 32, 79, 84, 72, 69, 82, 87, 73, 83, 69, 32, 70, 79, 82, 
+    32, 65, 78, 89, 32, 68, 73, 82, 69, 67, 84, 44, 32, 83, 80, 69, 67, 73, 
+    65, 76, 44, 32, 73, 78, 68, 73, 82, 69, 67, 84, 44, 10, 32, 32, 32, 32, 
+    32, 73, 78, 67, 73, 68, 69, 78, 84, 65, 76, 44, 32, 67, 79, 78, 83, 69, 
+    81, 85, 69, 78, 84, 73, 65, 76, 44, 32, 80, 85, 78, 73, 84, 73, 86, 69, 
+    44, 32, 69, 88, 69, 77, 80, 76, 65, 82, 89, 44, 32, 79, 82, 32, 79, 84, 
+    72, 69, 82, 32, 76, 79, 83, 83, 69, 83, 44, 10, 32, 32, 32, 32, 32, 67, 
+    79, 83, 84, 83, 44, 32, 69, 88, 80, 69, 78, 83, 69, 83, 44, 32, 79, 82, 
+    32, 68, 65, 77, 65, 71, 69, 83, 32, 65, 82, 73, 83, 73, 78, 71, 32, 79, 
+    85, 84, 32, 79, 70, 32, 84, 72, 73, 83, 32, 80, 85, 66, 76, 73, 67, 32, 
+    76, 73, 67, 69, 78, 83, 69, 32, 79, 82, 10, 32, 32, 32, 32, 32, 85, 83, 
+    69, 32, 79, 70, 32, 84, 72, 69, 32, 76, 73, 67, 69, 78, 83, 69, 68, 32, 
+    77, 65, 84, 69, 82, 73, 65, 76, 44, 32, 69, 86, 69, 78, 32, 73, 70, 32, 
+    84, 72, 69, 32, 76, 73, 67, 69, 78, 83, 79, 82, 32, 72, 65, 83, 32, 66, 
+    69, 69, 78, 10, 32, 32, 32, 32, 32, 65, 68, 86, 73, 83, 69, 68, 32, 79, 
+    70, 32, 84, 72, 69, 32, 80, 79, 83, 83, 73, 66, 73, 76, 73, 84, 89, 32, 
+    79, 70, 32, 83, 85, 67, 72, 32, 76, 79, 83, 83, 69, 83, 44, 32, 67, 79, 
+    83, 84, 83, 44, 32, 69, 88, 80, 69, 78, 83, 69, 83, 44, 32, 79, 82, 10, 
+    32, 32, 32, 32, 32, 68, 65, 77, 65, 71, 69, 83, 46, 32, 87, 72, 69, 82, 
+    69, 32, 65, 32, 76, 73, 77, 73, 84, 65, 84, 73, 79, 78, 32, 79, 70, 32, 
+    76, 73, 65, 66, 73, 76, 73, 84, 89, 32, 73, 83, 32, 78, 79, 84, 32, 65, 
+    76, 76, 79, 87, 69, 68, 32, 73, 78, 32, 70, 85, 76, 76, 32, 79, 82, 10, 
+    32, 32, 32, 32, 32, 73, 78, 32, 80, 65, 82, 84, 44, 32, 84, 72, 73, 83, 
+    32, 76, 73, 77, 73, 84, 65, 84, 73, 79, 78, 32, 77, 65, 89, 32, 78, 79, 
+    84, 32, 65, 80, 80, 76, 89, 32, 84, 79, 32, 89, 79, 85, 46, 10, 10, 32, 
+    32, 99, 46, 32, 84, 104, 101, 32, 100, 105, 115, 99, 108, 97, 105, 109, 101, 114, 
+    32, 111, 102, 32, 119, 97, 114, 114, 97, 110, 116, 105, 101, 115, 32, 97, 110, 100, 
+    32, 108, 105, 109, 105, 116, 97, 116, 105, 111, 110, 32, 111, 102, 32, 108, 105, 97, 
+    98, 105, 108, 105, 116, 121, 32, 112, 114, 111, 118, 105, 100, 101, 100, 10, 32, 32, 
+    32, 32, 32, 97, 98, 111, 118, 101, 32, 115, 104, 97, 108, 108, 32, 98, 101, 32, 
+    105, 110, 116, 101, 114, 112, 114, 101, 116, 101, 100, 32, 105, 110, 32, 97, 32, 109, 
+    97, 110, 110, 101, 114, 32, 116, 104, 97, 116, 44, 32, 116, 111, 32, 116, 104, 101, 
+    32, 101, 120, 116, 101, 110, 116, 10, 32, 32, 32, 32, 32, 112, 111, 115, 115, 105, 
+    98, 108, 101, 44, 32, 109, 111, 115, 116, 32, 99, 108, 111, 115, 101, 108, 121, 32, 
+    97, 112, 112, 114, 111, 120, 105, 109, 97, 116, 101, 115, 32, 97, 110, 32, 97, 98, 
+    115, 111, 108, 117, 116, 101, 32, 100, 105, 115, 99, 108, 97, 105, 109, 101, 114, 32, 
+    97, 110, 100, 10, 32, 32, 32, 32, 32, 119, 97, 105, 118, 101, 114, 32, 111, 102, 
+    32, 97, 108, 108, 32, 108, 105, 97, 98, 105, 108, 105, 116, 121, 46, 10, 10, 10, 
+    83, 101, 99, 116, 105, 111, 110, 32, 54, 32, 45, 45, 32, 84, 101, 114, 109, 32, 
+    97, 110, 100, 32, 84, 101, 114, 109, 105, 110, 97, 116, 105, 111, 110, 46, 10, 10, 
+    32, 32, 97, 46, 32, 84, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 
+    105, 99, 101, 110, 115, 101, 32, 97, 112, 112, 108, 105, 101, 115, 32, 102, 111, 114, 
+    32, 116, 104, 101, 32, 116, 101, 114, 109, 32, 111, 102, 32, 116, 104, 101, 32, 67, 
+    111, 112, 121, 114, 105, 103, 104, 116, 32, 97, 110, 100, 10, 32, 32, 32, 32, 32, 
+    83, 105, 109, 105, 108, 97, 114, 32, 82, 105, 103, 104, 116, 115, 32, 108, 105, 99, 
+    101, 110, 115, 101, 100, 32, 104, 101, 114, 101, 46, 32, 72, 111, 119, 101, 118, 101, 
+    114, 44, 32, 105, 102, 32, 89, 111, 117, 32, 102, 97, 105, 108, 32, 116, 111, 32, 
+    99, 111, 109, 112, 108, 121, 32, 119, 105, 116, 104, 10, 32, 32, 32, 32, 32, 116, 
+    104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 
+    44, 32, 116, 104, 101, 110, 32, 89, 111, 117, 114, 32, 114, 105, 103, 104, 116, 115, 
+    32, 117, 110, 100, 101, 114, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 
+    32, 76, 105, 99, 101, 110, 115, 101, 10, 32, 32, 32, 32, 32, 116, 101, 114, 109, 
+    105, 110, 97, 116, 101, 32, 97, 117, 116, 111, 109, 97, 116, 105, 99, 97, 108, 108, 
+    121, 46, 10, 10, 32, 32, 98, 46, 32, 87, 104, 101, 114, 101, 32, 89, 111, 117, 
+    114, 32, 114, 105, 103, 104, 116, 32, 116, 111, 32, 117, 115, 101, 32, 116, 104, 101, 
+    32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 
+    32, 104, 97, 115, 32, 116, 101, 114, 109, 105, 110, 97, 116, 101, 100, 32, 117, 110, 
+    100, 101, 114, 10, 32, 32, 32, 32, 32, 83, 101, 99, 116, 105, 111, 110, 32, 54, 
+    40, 97, 41, 44, 32, 105, 116, 32, 114, 101, 105, 110, 115, 116, 97, 116, 101, 115, 
+    58, 10, 10, 32, 32, 32, 32, 32, 32, 32, 49, 46, 32, 97, 117, 116, 111, 109, 
+    97, 116, 105, 99, 97, 108, 108, 121, 32, 97, 115, 32, 111, 102, 32, 116, 104, 101, 
+    32, 100, 97, 116, 101, 32, 116, 104, 101, 32, 118, 105, 111, 108, 97, 116, 105, 111, 
+    110, 32, 105, 115, 32, 99, 117, 114, 101, 100, 44, 32, 112, 114, 111, 118, 105, 100, 
+    101, 100, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 105, 116, 32, 105, 115, 
+    32, 99, 117, 114, 101, 100, 32, 119, 105, 116, 104, 105, 110, 32, 51, 48, 32, 100, 
+    97, 121, 115, 32, 111, 102, 32, 89, 111, 117, 114, 32, 100, 105, 115, 99, 111, 118, 
+    101, 114, 121, 32, 111, 102, 32, 116, 104, 101, 10, 32, 32, 32, 32, 32, 32, 32, 
+    32, 32, 32, 118, 105, 111, 108, 97, 116, 105, 111, 110, 59, 32, 111, 114, 10, 10, 
+    32, 32, 32, 32, 32, 32, 32, 50, 46, 32, 117, 112, 111, 110, 32, 101, 120, 112, 
+    114, 101, 115, 115, 32, 114, 101, 105, 110, 115, 116, 97, 116, 101, 109, 101, 110, 116, 
+    32, 98, 121, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 111, 114, 46, 10, 
+    10, 32, 32, 32, 32, 32, 70, 111, 114, 32, 116, 104, 101, 32, 97, 118, 111, 105, 
+    100, 97, 110, 99, 101, 32, 111, 102, 32, 100, 111, 117, 98, 116, 44, 32, 116, 104, 
+    105, 115, 32, 83, 101, 99, 116, 105, 111, 110, 32, 54, 40, 98, 41, 32, 100, 111, 
+    101, 115, 32, 110, 111, 116, 32, 97, 102, 102, 101, 99, 116, 32, 97, 110, 121, 10, 
+    32, 32, 32, 32, 32, 114, 105, 103, 104, 116, 32, 116, 104, 101, 32, 76, 105, 99, 
+    101, 110, 115, 111, 114, 32, 109, 97, 121, 32, 104, 97, 118, 101, 32, 116, 111, 32, 
+    115, 101, 101, 107, 32, 114, 101, 109, 101, 100, 105, 101, 115, 32, 102, 111, 114, 32, 
+    89, 111, 117, 114, 32, 118, 105, 111, 108, 97, 116, 105, 111, 110, 115, 10, 32, 32, 
+    32, 32, 32, 111, 102, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 
+    76, 105, 99, 101, 110, 115, 101, 46, 10, 10, 32, 32, 99, 46, 32, 70, 111, 114, 
+    32, 116, 104, 101, 32, 97, 118, 111, 105, 100, 97, 110, 99, 101, 32, 111, 102, 32, 
+    100, 111, 117, 98, 116, 44, 32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 111, 
+    114, 32, 109, 97, 121, 32, 97, 108, 115, 111, 32, 111, 102, 102, 101, 114, 32, 116, 
+    104, 101, 10, 32, 32, 32, 32, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 
+    97, 116, 101, 114, 105, 97, 108, 32, 117, 110, 100, 101, 114, 32, 115, 101, 112, 97, 
+    114, 97, 116, 101, 32, 116, 101, 114, 109, 115, 32, 111, 114, 32, 99, 111, 110, 100, 
+    105, 116, 105, 111, 110, 115, 32, 111, 114, 32, 115, 116, 111, 112, 10, 32, 32, 32, 
+    32, 32, 100, 105, 115, 116, 114, 105, 98, 117, 116, 105, 110, 103, 32, 116, 104, 101, 
+    32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 
+    32, 97, 116, 32, 97, 110, 121, 32, 116, 105, 109, 101, 59, 32, 104, 111, 119, 101, 
+    118, 101, 114, 44, 32, 100, 111, 105, 110, 103, 32, 115, 111, 10, 32, 32, 32, 32, 
+    32, 119, 105, 108, 108, 32, 110, 111, 116, 32, 116, 101, 114, 109, 105, 110, 97, 116, 
+    101, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 
+    110, 115, 101, 46, 10, 10, 32, 32, 100, 46, 32, 83, 101, 99, 116, 105, 111, 110, 
+    115, 32, 49, 44, 32, 53, 44, 32, 54, 44, 32, 55, 44, 32, 97, 110, 100, 32, 
+    56, 32, 115, 117, 114, 118, 105, 118, 101, 32, 116, 101, 114, 109, 105, 110, 97, 116, 
+    105, 111, 110, 32, 111, 102, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 
+    10, 32, 32, 32, 32, 32, 76, 105, 99, 101, 110, 115, 101, 46, 10, 10, 10, 83, 
+    101, 99, 116, 105, 111, 110, 32, 55, 32, 45, 45, 32, 79, 116, 104, 101, 114, 32, 
+    84, 101, 114, 109, 115, 32, 97, 110, 100, 32, 67, 111, 110, 100, 105, 116, 105, 111, 
+    110, 115, 46, 10, 10, 32, 32, 97, 46, 32, 84, 104, 101, 32, 76, 105, 99, 101, 
+    110, 115, 111, 114, 32, 115, 104, 97, 108, 108, 32, 110, 111, 116, 32, 98, 101, 32, 
+    98, 111, 117, 110, 100, 32, 98, 121, 32, 97, 110, 121, 32, 97, 100, 100, 105, 116, 
+    105, 111, 110, 97, 108, 32, 111, 114, 32, 100, 105, 102, 102, 101, 114, 101, 110, 116, 
+    10, 32, 32, 32, 32, 32, 116, 101, 114, 109, 115, 32, 111, 114, 32, 99, 111, 110, 
+    100, 105, 116, 105, 111, 110, 115, 32, 99, 111, 109, 109, 117, 110, 105, 99, 97, 116, 
+    101, 100, 32, 98, 121, 32, 89, 111, 117, 32, 117, 110, 108, 101, 115, 115, 32, 101, 
+    120, 112, 114, 101, 115, 115, 108, 121, 32, 97, 103, 114, 101, 101, 100, 46, 10, 10, 
+    32, 32, 98, 46, 32, 65, 110, 121, 32, 97, 114, 114, 97, 110, 103, 101, 109, 101, 
+    110, 116, 115, 44, 32, 117, 110, 100, 101, 114, 115, 116, 97, 110, 100, 105, 110, 103, 
+    115, 44, 32, 111, 114, 32, 97, 103, 114, 101, 101, 109, 101, 110, 116, 115, 32, 114, 
+    101, 103, 97, 114, 100, 105, 110, 103, 32, 116, 104, 101, 10, 32, 32, 32, 32, 32, 
+    76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 114, 105, 97, 108, 32, 
+    110, 111, 116, 32, 115, 116, 97, 116, 101, 100, 32, 104, 101, 114, 101, 105, 110, 32, 
+    97, 114, 101, 32, 115, 101, 112, 97, 114, 97, 116, 101, 32, 102, 114, 111, 109, 32, 
+    97, 110, 100, 10, 32, 32, 32, 32, 32, 105, 110, 100, 101, 112, 101, 110, 100, 101, 
+    110, 116, 32, 111, 102, 32, 116, 104, 101, 32, 116, 101, 114, 109, 115, 32, 97, 110, 
+    100, 32, 99, 111, 110, 100, 105, 116, 105, 111, 110, 115, 32, 111, 102, 32, 116, 104, 
+    105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 46, 
+    10, 10, 10, 83, 101, 99, 116, 105, 111, 110, 32, 56, 32, 45, 45, 32, 73, 110, 
+    116, 101, 114, 112, 114, 101, 116, 97, 116, 105, 111, 110, 46, 10, 10, 32, 32, 97, 
+    46, 32, 70, 111, 114, 32, 116, 104, 101, 32, 97, 118, 111, 105, 100, 97, 110, 99, 
+    101, 32, 111, 102, 32, 100, 111, 117, 98, 116, 44, 32, 116, 104, 105, 115, 32, 80, 
+    117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 32, 100, 111, 101, 115, 
+    32, 110, 111, 116, 44, 32, 97, 110, 100, 10, 32, 32, 32, 32, 32, 115, 104, 97, 
+    108, 108, 32, 110, 111, 116, 32, 98, 101, 32, 105, 110, 116, 101, 114, 112, 114, 101, 
+    116, 101, 100, 32, 116, 111, 44, 32, 114, 101, 100, 117, 99, 101, 44, 32, 108, 105, 
+    109, 105, 116, 44, 32, 114, 101, 115, 116, 114, 105, 99, 116, 44, 32, 111, 114, 32, 
+    105, 109, 112, 111, 115, 101, 10, 32, 32, 32, 32, 32, 99, 111, 110, 100, 105, 116, 
+    105, 111, 110, 115, 32, 111, 110, 32, 97, 110, 121, 32, 117, 115, 101, 32, 111, 102, 
+    32, 116, 104, 101, 32, 76, 105, 99, 101, 110, 115, 101, 100, 32, 77, 97, 116, 101, 
+    114, 105, 97, 108, 32, 116, 104, 97, 116, 32, 99, 111, 117, 108, 100, 32, 108, 97, 
+    119, 102, 117, 108, 108, 121, 10, 32, 32, 32, 32, 32, 98, 101, 32, 109, 97, 100, 
+    101, 32, 119, 105, 116, 104, 111, 117, 116, 32, 112, 101, 114, 109, 105, 115, 115, 105, 
+    111, 110, 32, 117, 110, 100, 101, 114, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 
+    105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 46, 10, 10, 32, 32, 98, 46, 32, 
+    84, 111, 32, 116, 104, 101, 32, 101, 120, 116, 101, 110, 116, 32, 112, 111, 115, 115, 
+    105, 98, 108, 101, 44, 32, 105, 102, 32, 97, 110, 121, 32, 112, 114, 111, 118, 105, 
+    115, 105, 111, 110, 32, 111, 102, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 
+    99, 32, 76, 105, 99, 101, 110, 115, 101, 32, 105, 115, 10, 32, 32, 32, 32, 32, 
+    100, 101, 101, 109, 101, 100, 32, 117, 110, 101, 110, 102, 111, 114, 99, 101, 97, 98, 
+    108, 101, 44, 32, 105, 116, 32, 115, 104, 97, 108, 108, 32, 98, 101, 32, 97, 117, 
+    116, 111, 109, 97, 116, 105, 99, 97, 108, 108, 121, 32, 114, 101, 102, 111, 114, 109, 
+    101, 100, 32, 116, 111, 32, 116, 104, 101, 10, 32, 32, 32, 32, 32, 109, 105, 110, 
+    105, 109, 117, 109, 32, 101, 120, 116, 101, 110, 116, 32, 110, 101, 99, 101, 115, 115, 
+    97, 114, 121, 32, 116, 111, 32, 109, 97, 107, 101, 32, 105, 116, 32, 101, 110, 102, 
+    111, 114, 99, 101, 97, 98, 108, 101, 46, 32, 73, 102, 32, 116, 104, 101, 32, 112, 
+    114, 111, 118, 105, 115, 105, 111, 110, 10, 32, 32, 32, 32, 32, 99, 97, 110, 110, 
+    111, 116, 32, 98, 101, 32, 114, 101, 102, 111, 114, 109, 101, 100, 44, 32, 105, 116, 
+    32, 115, 104, 97, 108, 108, 32, 98, 101, 32, 115, 101, 118, 101, 114, 101, 100, 32, 
+    102, 114, 111, 109, 32, 116, 104, 105, 115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 
+    105, 99, 101, 110, 115, 101, 10, 32, 32, 32, 32, 32, 119, 105, 116, 104, 111, 117, 
+    116, 32, 97, 102, 102, 101, 99, 116, 105, 110, 103, 32, 116, 104, 101, 32, 101, 110, 
+    102, 111, 114, 99, 101, 97, 98, 105, 108, 105, 116, 121, 32, 111, 102, 32, 116, 104, 
+    101, 32, 114, 101, 109, 97, 105, 110, 105, 110, 103, 32, 116, 101, 114, 109, 115, 32, 
+    97, 110, 100, 10, 32, 32, 32, 32, 32, 99, 111, 110, 100, 105, 116, 105, 111, 110, 
+    115, 46, 10, 10, 32, 32, 99, 46, 32, 78, 111, 32, 116, 101, 114, 109, 32, 111, 
+    114, 32, 99, 111, 110, 100, 105, 116, 105, 111, 110, 32, 111, 102, 32, 116, 104, 105, 
+    115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 32, 119, 
+    105, 108, 108, 32, 98, 101, 32, 119, 97, 105, 118, 101, 100, 32, 97, 110, 100, 32, 
+    110, 111, 10, 32, 32, 32, 32, 32, 102, 97, 105, 108, 117, 114, 101, 32, 116, 111, 
+    32, 99, 111, 109, 112, 108, 121, 32, 99, 111, 110, 115, 101, 110, 116, 101, 100, 32, 
+    116, 111, 32, 117, 110, 108, 101, 115, 115, 32, 101, 120, 112, 114, 101, 115, 115, 108, 
+    121, 32, 97, 103, 114, 101, 101, 100, 32, 116, 111, 32, 98, 121, 32, 116, 104, 101, 
+    10, 32, 32, 32, 32, 32, 76, 105, 99, 101, 110, 115, 111, 114, 46, 10, 10, 32, 
+    32, 100, 46, 32, 78, 111, 116, 104, 105, 110, 103, 32, 105, 110, 32, 116, 104, 105, 
+    115, 32, 80, 117, 98, 108, 105, 99, 32, 76, 105, 99, 101, 110, 115, 101, 32, 99, 
+    111, 110, 115, 116, 105, 116, 117, 116, 101, 115, 32, 111, 114, 32, 109, 97, 121, 32, 
+    98, 101, 32, 105, 110, 116, 101, 114, 112, 114, 101, 116, 101, 100, 10, 32, 32, 32, 
+    32, 32, 97, 115, 32, 97, 32, 108, 105, 109, 105, 116, 97, 116, 105, 111, 110, 32, 
+    117, 112, 111, 110, 44, 32, 111, 114, 32, 119, 97, 105, 118, 101, 114, 32, 111, 102, 
+    44, 32, 97, 110, 121, 32, 112, 114, 105, 118, 105, 108, 101, 103, 101, 115, 32, 97, 
+    110, 100, 32, 105, 109, 109, 117, 110, 105, 116, 105, 101, 115, 10, 32, 32, 32, 32, 
+    32, 116, 104, 97, 116, 32, 97, 112, 112, 108, 121, 32, 116, 111, 32, 116, 104, 101, 
+    32, 76, 105, 99, 101, 110, 115, 111, 114, 32, 111, 114, 32, 89, 111, 117, 44, 32, 
+    105, 110, 99, 108, 117, 100, 105, 110, 103, 32, 102, 114, 111, 109, 32, 116, 104, 101, 
+    32, 108, 101, 103, 97, 108, 10, 32, 32, 32, 32, 32, 112, 114, 111, 99, 101, 115, 
+    115, 101, 115, 32, 111, 102, 32, 97, 110, 121, 32, 106, 117, 114, 105, 115, 100, 105, 
+    99, 116, 105, 111, 110, 32, 111, 114, 32, 97, 117, 116, 104, 111, 114, 105, 116, 121, 
+    46, 10, 10, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
+    61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
+    61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
+    61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
+    61, 61, 10, 10, 67, 114, 101, 97, 116, 105, 118, 101, 32, 67, 111, 109, 109, 111, 
+    110, 115, 32, 105, 115, 32, 110, 111, 116, 32, 97, 32, 112, 97, 114, 116, 121, 32, 
+    116, 111, 32, 105, 116, 115, 32, 112, 117, 98, 108, 105, 99, 10, 108, 105, 99, 101, 
+    110, 115, 101, 115, 46, 32, 78, 111, 116, 119, 105, 116, 104, 115, 116, 97, 110, 100, 
+    105, 110, 103, 44, 32, 67, 114, 101, 97, 116, 105, 118, 101, 32, 67, 111, 109, 109, 
+    111, 110, 115, 32, 109, 97, 121, 32, 101, 108, 101, 99, 116, 32, 116, 111, 32, 97, 
+    112, 112, 108, 121, 32, 111, 110, 101, 32, 111, 102, 10, 105, 116, 115, 32, 112, 117, 
+    98, 108, 105, 99, 32, 108, 105, 99, 101, 110, 115, 101, 115, 32, 116, 111, 32, 109, 
+    97, 116, 101, 114, 105, 97, 108, 32, 105, 116, 32, 112, 117, 98, 108, 105, 115, 104, 
+    101, 115, 32, 97, 110, 100, 32, 105, 110, 32, 116, 104, 111, 115, 101, 32, 105, 110, 
+    115, 116, 97, 110, 99, 101, 115, 10, 119, 105, 108, 108, 32, 98, 101, 32, 99, 111, 
+    110, 115, 105, 100, 101, 114, 101, 100, 32, 116, 104, 101, 32, 226, 128, 156, 76, 105, 
+    99, 101, 110, 115, 111, 114, 46, 226, 128, 157, 32, 84, 104, 101, 32, 116, 101, 120, 
+    116, 32, 111, 102, 32, 116, 104, 101, 32, 67, 114, 101, 97, 116, 105, 118, 101, 32, 
+    67, 111, 109, 109, 111, 110, 115, 10, 112, 117, 98, 108, 105, 99, 32, 108, 105, 99, 
+    101, 110, 115, 101, 115, 32, 105, 115, 32, 100, 101, 100, 105, 99, 97, 116, 101, 100, 
+    32, 116, 111, 32, 116, 104, 101, 32, 112, 117, 98, 108, 105, 99, 32, 100, 111, 109, 
+    97, 105, 110, 32, 117, 110, 100, 101, 114, 32, 116, 104, 101, 32, 67, 67, 48, 32, 
+    80, 117, 98, 108, 105, 99, 10, 68, 111, 109, 97, 105, 110, 32, 68, 101, 100, 105, 
+    99, 97, 116, 105, 111, 110, 46, 32, 69, 120, 99, 101, 112, 116, 32, 102, 111, 114, 
+    32, 116, 104, 101, 32, 108, 105, 109, 105, 116, 101, 100, 32, 112, 117, 114, 112, 111, 
+    115, 101, 32, 111, 102, 32, 105, 110, 100, 105, 99, 97, 116, 105, 110, 103, 32, 116, 
+    104, 97, 116, 10, 109, 97, 116, 101, 114, 105, 97, 108, 32, 105, 115, 32, 115, 104, 
+    97, 114, 101, 100, 32, 117, 110, 100, 101, 114, 32, 97, 32, 67, 114, 101, 97, 116, 
+    105, 118, 101, 32, 67, 111, 109, 109, 111, 110, 115, 32, 112, 117, 98, 108, 105, 99, 
+    32, 108, 105, 99, 101, 110, 115, 101, 32, 111, 114, 32, 97, 115, 10, 111, 116, 104, 
+    101, 114, 119, 105, 115, 101, 32, 112, 101, 114, 109, 105, 116, 116, 101, 100, 32, 98, 
+    121, 32, 116, 104, 101, 32, 67, 114, 101, 97, 116, 105, 118, 101, 32, 67, 111, 109, 
+    109, 111, 110, 115, 32, 112, 111, 108, 105, 99, 105, 101, 115, 32, 112, 117, 98, 108, 
+    105, 115, 104, 101, 100, 32, 97, 116, 10, 99, 114, 101, 97, 116, 105, 118, 101, 99, 
+    111, 109, 109, 111, 110, 115, 46, 111, 114, 103, 47, 112, 111, 108, 105, 99, 105, 101, 
+    115, 44, 32, 67, 114, 101, 97, 116, 105, 118, 101, 32, 67, 111, 109, 109, 111, 110, 
+    115, 32, 100, 111, 101, 115, 32, 110, 111, 116, 32, 97, 117, 116, 104, 111, 114, 105, 
+    122, 101, 32, 116, 104, 101, 10, 117, 115, 101, 32, 111, 102, 32, 116, 104, 101, 32, 
+    116, 114, 97, 100, 101, 109, 97, 114, 107, 32, 34, 67, 114, 101, 97, 116, 105, 118, 
+    101, 32, 67, 111, 109, 109, 111, 110, 115, 34, 32, 111, 114, 32, 97, 110, 121, 32, 
+    111, 116, 104, 101, 114, 32, 116, 114, 97, 100, 101, 109, 97, 114, 107, 32, 111, 114, 
+    32, 108, 111, 103, 111, 10, 111, 102, 32, 67, 114, 101, 97, 116, 105, 118, 101, 32, 
+    67, 111, 109, 109, 111, 110, 115, 32, 119, 105, 116, 104, 111, 117, 116, 32, 105, 116, 
+    115, 32, 112, 114, 105, 111, 114, 32, 119, 114, 105, 116, 116, 101, 110, 32, 99, 111, 
+    110, 115, 101, 110, 116, 32, 105, 110, 99, 108, 117, 100, 105, 110, 103, 44, 10, 119, 
+    105, 116, 104, 111, 117, 116, 32, 108, 105, 109, 105, 116, 97, 116, 105, 111, 110, 44, 
+    32, 105, 110, 32, 99, 111, 110, 110, 101, 99, 116, 105, 111, 110, 32, 119, 105, 116, 
+    104, 32, 97, 110, 121, 32, 117, 110, 97, 117, 116, 104, 111, 114, 105, 122, 101, 100, 
+    32, 109, 111, 100, 105, 102, 105, 99, 97, 116, 105, 111, 110, 115, 10, 116, 111, 32, 
+    97, 110, 121, 32, 111, 102, 32, 105, 116, 115, 32, 112, 117, 98, 108, 105, 99, 32, 
+    108, 105, 99, 101, 110, 115, 101, 115, 32, 111, 114, 32, 97, 110, 121, 32, 111, 116, 
+    104, 101, 114, 32, 97, 114, 114, 97, 110, 103, 101, 109, 101, 110, 116, 115, 44, 10, 
+    117, 110, 100, 101, 114, 115, 116, 97, 110, 100, 105, 110, 103, 115, 44, 32, 111, 114, 
+    32, 97, 103, 114, 101, 101, 109, 101, 110, 116, 115, 32, 99, 111, 110, 99, 101, 114, 
+    110, 105, 110, 103, 32, 117, 115, 101, 32, 111, 102, 32, 108, 105, 99, 101, 110, 115, 
+    101, 100, 32, 109, 97, 116, 101, 114, 105, 97, 108, 46, 32, 70, 111, 114, 10, 116, 
+    104, 101, 32, 97, 118, 111, 105, 100, 97, 110, 99, 101, 32, 111, 102, 32, 100, 111, 
+    117, 98, 116, 44, 32, 116, 104, 105, 115, 32, 112, 97, 114, 97, 103, 114, 97, 112, 
+    104, 32, 100, 111, 101, 115, 32, 110, 111, 116, 32, 102, 111, 114, 109, 32, 112, 97, 
+    114, 116, 32, 111, 102, 32, 116, 104, 101, 10, 112, 117, 98, 108, 105, 99, 32, 108, 
+    105, 99, 101, 110, 115, 101, 115, 46, 10, 10, 67, 114, 101, 97, 116, 105, 118, 101, 
+    32, 67, 111, 109, 109, 111, 110, 115, 32, 109, 97, 121, 32, 98, 101, 32, 99, 111, 
+    110, 116, 97, 99, 116, 101, 100, 32, 97, 116, 32, 99, 114, 101, 97, 116, 105, 118, 
+    101, 99, 111, 109, 109, 111, 110, 115, 46, 111, 114, 103, 46, 10, 0
+};
+
+static const char file_2[] = {
     104, 101, 108, 108, 111, 32, 102, 114, 111, 109, 32, 120, 105, 97, 111, 70, 83, 10, 
     104, 101, 108, 108, 111, 32, 102, 114, 111, 109, 32, 97, 110, 32, 97, 112, 112, 45, 
     114, 101, 97, 100, 97, 98, 108, 101, 32, 102, 105, 108, 101, 10, 0
 };
 
-static const char file_1[] = {
+static const char file_3[] = {
     120, 105, 97, 111, 79, 83, 32, 101, 109, 98, 101, 100, 100, 101, 100, 32, 102, 105, 
     108, 101, 32, 115, 121, 115, 116, 101, 109, 10, 10, 84, 104, 105, 115, 32, 116, 101, 
     120, 116, 32, 105, 115, 32, 99, 111, 109, 112, 105, 108, 101, 100, 32, 105, 110, 116, 
@@ -313,18 +1877,31 @@ static const char file_1[] = {
 
 static const xiao_app app_table[] = {
     { "cat", xiao_app_cat },
+    { "cd", xiao_app_cd },
+    { "cp", xiao_app_cp },
+    { "df", xiao_app_df },
+    { "free", xiao_app_free },
     { "grep", xiao_app_grep },
+    { "head", xiao_app_head },
     { "hello", xiao_app_hello },
+    { "less", xiao_app_less },
     { "ls", xiao_app_ls },
+    { "mkdir", xiao_app_mkdir },
+    { "mv", xiao_app_mv },
+    { "pwd", xiao_app_pwd },
+    { "rm", xiao_app_rm },
     { "sed", xiao_app_sed },
     { "serial_hello", xiao_app_serial_hello },
     { "terminal", xiao_app_terminal },
+    { "top", xiao_app_top },
     { "xuexi", xiao_app_xuexi },
 };
 
 static const xiao_file file_table[] = {
-    { "hello.txt", file_0, 50 },
-    { "readme.txt", file_1, 142 },
+    { "credit.txt", file_0, 0 },
+    { "licence.txt", file_1, 19346 },
+    { "test/hello.txt", file_2, 50 },
+    { "test/readme.txt", file_3, 142 },
 };
 
 const xiao_boot_image xiao_image = {
@@ -339,7 +1916,7 @@ const xiao_boot_image xiao_image = {
 #include "xiao.h"
 
 static void xiao_app_cat__usage(xiao_env *env) {
-    xiao_console_print(env, "usage: cat FILE...\r\n");
+    xiao_console_print(env, "usage: cat FILENAME...\r\n");
 }
 
 int xiao_app_cat(xiao_env *env) {
@@ -353,15 +1930,168 @@ int xiao_app_cat(xiao_env *env) {
         const char *data = 0;
         xiao_size size = 0;
         const char *name = xiao_argv(env, i);
+        
         if (xiao_file_read(name, &data, &size) != 0) {
             xiao_console_print(env, "cat: not found: ");
             xiao_console_print(env, name);
             xiao_console_print(env, "\r\n");
             continue;
         }
-        xiao_console_write(env, data, size);
-        if (size == 0 || data[size - 1] != '\n') xiao_console_print(env, "\r\n");
+
+        // ファイルが空の場合は改行だけ出力して次へ
+        if (size == 0) {
+            xiao_console_print(env, "\r\n");
+            continue;
+        }
+
+        xiao_size pos = 0;
+        while (pos < size) {
+            xiao_size line_start = pos;
+            
+            // 改行文字 (\r または \n) が来るまで文字を読み進める
+            while (pos < size && data[pos] != '\r' && data[pos] != '\n') {
+                pos++;
+            }
+
+            // 行の中身（改行以外）をまとめて書き出す
+            if (pos > line_start) {
+                xiao_console_write(env, &data[line_start], pos - line_start);
+            }
+
+            // ターミナル用の正しい改行を明示的に出力
+            xiao_console_print(env, "\r\n");
+
+            // ファイル側の改行文字 (\r\n, \n, \r) を安全にスキップ
+            if (pos < size && data[pos] == '\r') {
+                pos++;
+                if (pos < size && data[pos] == '\n') {
+                    pos++;
+                }
+            } else if (pos < size && data[pos] == '\n') {
+                pos++;
+            }
+        }
     }
+    return 0;
+}
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/cd.c"
+#include "xiao.h"
+
+int xiao_app_cd(xiao_env *env) {
+    const char *path = "/";
+    if (xiao_argc(env) > 1) path = xiao_argv(env, 1);
+    if (xiao_fs_chdir(path) != 0) {
+        xiao_console_print(env, "cd: not a directory: ");
+        xiao_console_print(env, path);
+        xiao_console_print(env, "\r\n");
+        return 1;
+    }
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/cp.c"
+#include "xiao.h"
+
+int xiao_app_cp(xiao_env *env) {
+    if (xiao_argc(env) != 3) {
+        xiao_console_print(env, "usage: cp SRC DST\r\n");
+        return 1;
+    }
+    if (xiao_fs_copy(xiao_argv(env, 1), xiao_argv(env, 2)) != 0) {
+        xiao_console_print(env, "cp: failed\r\n");
+        return 1;
+    }
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/df.c"
+#include "xiao.h"
+
+static void xiao_app_df__print_uint(xiao_env *env, xiao_size value) {
+    char buf[24];
+    xiao_size i = sizeof(buf);
+    buf[--i] = 0;
+    if (value == 0) {
+        xiao_console_print(env, "0");
+        return;
+    }
+    while (value && i > 0) {
+        buf[--i] = (char)('0' + (value % 10));
+        value /= 10;
+    }
+    xiao_console_print(env, &buf[i]);
+}
+
+static void xiao_app_df__print_line(xiao_env *env, const char *name, xiao_size used, xiao_size total) {
+    xiao_console_print(env, name);
+    xiao_console_print(env, " used=");
+    xiao_app_df__print_uint(env, used);
+    xiao_console_print(env, " free=");
+    xiao_app_df__print_uint(env, total > used ? total - used : 0);
+    xiao_console_print(env, " total=");
+    xiao_app_df__print_uint(env, total);
+    xiao_console_print(env, "\r\n");
+}
+
+int xiao_app_df(xiao_env *env) {
+    xiao_fs_info info;
+    xiao_fs_info_read(&info);
+    xiao_app_df__print_line(env, "xiaoFS-ram", info.ram_used, info.ram_total);
+    xiao_app_df__print_line(env, "xiaoFS-nodes", info.nodes_used, info.nodes_total);
+    xiao_console_print(env, "xiaoFS-rom used=");
+    xiao_app_df__print_uint(env, info.rom_used);
+    xiao_console_print(env, "\r\nfiles=");
+    xiao_app_df__print_uint(env, info.files);
+    xiao_console_print(env, " dirs=");
+    xiao_app_df__print_uint(env, info.dirs);
+    xiao_console_print(env, "\r\n");
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/free.c"
+#include "xiao.h"
+
+static void xiao_app_free__print_uint(xiao_env *env, xiao_size value) {
+    char buf[24];
+    xiao_size i = sizeof(buf);
+    buf[--i] = 0;
+    if (value == 0) {
+        xiao_console_print(env, "0");
+        return;
+    }
+    while (value && i > 0) {
+        buf[--i] = (char)('0' + (value % 10));
+        value /= 10;
+    }
+    xiao_console_print(env, &buf[i]);
+}
+
+static void xiao_app_free__print_row(xiao_env *env, const char *name, xiao_size total, xiao_size used) {
+    xiao_console_print(env, name);
+    xiao_console_print(env, " total=");
+    xiao_app_free__print_uint(env, total);
+    xiao_console_print(env, " used=");
+    xiao_app_free__print_uint(env, used);
+    xiao_console_print(env, " free=");
+    xiao_app_free__print_uint(env, total > used ? total - used : 0);
+    xiao_console_print(env, "\r\n");
+}
+
+int xiao_app_free(xiao_env *env) {
+    xiao_fs_info info;
+    xiao_fs_info_read(&info);
+    xiao_app_free__print_row(env, "fs-ram", info.ram_total, info.ram_used);
+    xiao_app_free__print_row(env, "fs-nodes", info.nodes_total, info.nodes_used);
+    xiao_app_free__print_row(env, "tasks", xiao_task_slot_count(), xiao_task_active_count());
+    xiao_console_print(env, "apps total=");
+    xiao_app_free__print_uint(env, xiao_app_count());
+    xiao_console_print(env, "\r\nrom-file-bytes used=");
+    xiao_app_free__print_uint(env, info.rom_used);
+    xiao_console_print(env, "\r\n");
     return 0;
 }
 
@@ -422,6 +2152,140 @@ int xiao_app_grep(xiao_env *env) {
 }
 
 
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/head.c"
+#include "xiao.h"
+
+// 文字列比較用の補助関数
+static int xiao_app_head__xiao_streq_local(const char *a, const char *b) {
+    while (*a && *b && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == 0 && *b == 0;
+}
+
+// 文字列を整数(int)に変換する補助関数 (atoiの代用)
+static int xiao_app_head__parse_int(const char *str) {
+    int res = 0;
+    while (*str >= '0' && *str <= '9') {
+        res = res * 10 + (*str - '0');
+        str++;
+    }
+    return res;
+}
+
+static void xiao_app_head__usage(xiao_env *env) {
+    xiao_console_print(env, "usage: head [-n lines] [-q] FILENAME...\r\n");
+}
+
+int xiao_app_head(xiao_env *env) {
+    int argc = xiao_argc(env);
+    if (argc < 2) {
+        xiao_app_head__usage(env);
+        return 1;
+    }
+
+    int num_lines = 10; // デフォルトの表示行数は10行
+    int quiet = 0;      // デフォルトはヘッダー表示あり (-qで1にする)
+    
+    // ファイル引数のインデックスを保存する配列 (最大32ファイルまで対応)
+    int file_indices[32];
+    int file_count = 0;
+    
+    // 引数の解析
+    for (int i = 1; i < argc; i++) {
+        const char *arg = xiao_argv(env, i);
+        
+        if (xiao_app_head__xiao_streq_local(arg, "-n")) {
+            // -n の次は行数の数字が来ると想定
+            if (i + 1 < argc) {
+                i++;
+                num_lines = xiao_app_head__parse_int(xiao_argv(env, i));
+            } else {
+                xiao_console_print(env, "head: option requires an argument -- n\r\n");
+                return 1;
+            }
+        } else if (xiao_app_head__xiao_streq_local(arg, "-q")) {
+            quiet = 1;
+        } else {
+            // オプションではない引数はファイル名として処理
+            if (file_count < 32) {
+                file_indices[file_count++] = i;
+            }
+        }
+    }
+
+    if (file_count == 0) {
+        xiao_app_head__usage(env);
+        return 1;
+    }
+
+    int first_file = 1;
+
+    // 指定されたファイルを順に処理
+    for (int k = 0; k < file_count; k++) {
+        const char *name = xiao_argv(env, file_indices[k]);
+        const char *data = 0;
+        xiao_size size = 0;
+
+        if (xiao_file_read(name, &data, &size) != 0) {
+            xiao_console_print(env, "head: not found: ");
+            xiao_console_print(env, name);
+            xiao_console_print(env, "\r\n");
+            continue;
+        }
+
+        // 標準的な head と同様に、複数ファイル指定時はファイル名をヘッダー出力する
+        // ただし -q が指定されている場合は出力しない
+        if (file_count > 1 && !quiet) {
+            if (!first_file) {
+                xiao_console_print(env, "\r\n"); // 複数ファイル間の区切り用空行
+            }
+            xiao_console_print(env, "==> ");
+            xiao_console_print(env, name);
+            xiao_console_print(env, " <==\r\n");
+        }
+        first_file = 0;
+
+        // 空ファイルの場合は次へ
+        if (size == 0) continue;
+
+        xiao_size pos = 0;
+        int current_line = 0;
+
+        // 指定された行数 (num_lines) に到達するまで、またはファイル終端まで読み込む
+        while (pos < size && current_line < num_lines) {
+            xiao_size line_start = pos;
+            
+            // 改行までポインタを進める
+            while (pos < size && data[pos] != '\r' && data[pos] != '\n') {
+                pos++;
+            }
+
+            // 行の印字
+            if (pos > line_start) {
+                xiao_console_write(env, &data[line_start], pos - line_start);
+            }
+
+            // ターミナル用の正しい改行(\r\n)を強制
+            xiao_console_print(env, "\r\n");
+            current_line++;
+
+            // ファイル側の改行コードを安全に読み飛ばす (\r\n, \n, \r に対応)
+            if (pos < size && data[pos] == '\r') {
+                pos++;
+                if (pos < size && data[pos] == '\n') {
+                    pos++;
+                }
+            } else if (pos < size && data[pos] == '\n') {
+                pos++;
+            }
+        }
+    }
+
+    return 0;
+}
+
 #line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/hello.c"
 #include "xiao.h"
 
@@ -431,14 +2295,108 @@ int xiao_app_hello(xiao_env *env) {
 }
 
 
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/less.c"
+#include "xiao.h"
+
+#define PAGE_LINES 23
+
+static void xiao_app_less__usage(xiao_env *env) {
+    xiao_console_print(env, "usage: less FILENAME\r\n");
+}
+
+static int xiao_app_less__wait_for_key(xiao_env *env) {
+    while (1) {
+        int ch = xiao_input_read(env);
+        if (ch >= 0) {
+            return ch;
+        }
+        xiao_wait(env, 10);
+    }
+}
+
+int xiao_app_less(xiao_env *env) {
+    if (xiao_argc(env) < 2) {
+        xiao_app_less__usage(env);
+        return 1;
+    }
+
+    const char *name = xiao_argv(env, 1);
+    const char *data = 0;
+    xiao_size size = 0;
+
+    if (xiao_file_read(name, &data, &size) != 0) {
+        xiao_console_print(env, "less: not found: ");
+        xiao_console_print(env, name);
+        xiao_console_print(env, "\r\n");
+        return 1;
+    }
+
+    int lines_to_show = PAGE_LINES;
+    xiao_size i = 0;
+
+    while (i < size) {
+        if (lines_to_show <= 0) {
+            xiao_console_print(env, "--More--");
+            
+            int c;
+            while (1) {
+                c = xiao_app_less__wait_for_key(env);
+                
+                if (c == 'q' || c == 'Q') {
+                    xiao_console_print(env, "\r        \r");
+                    return 0;
+                } else if (c == ' ') {
+                    lines_to_show = PAGE_LINES;
+                    break;
+                } else if (c == '\r' || c == '\n') {
+                    lines_to_show = 1;
+                    break;
+                }
+            }
+            xiao_console_print(env, "\r        \r");
+        }
+
+        // 改行文字 (\r または \n) が来るまでインデックスを進める
+        xiao_size line_start = i;
+        while (i < size && data[i] != '\r' && data[i] != '\n') {
+            i++;
+        }
+
+        // 行の中身だけをコンソールに書き出す（改行文字は含まれない）
+        if (i > line_start) {
+            xiao_console_write(env, &data[line_start], i - line_start);
+        }
+
+        // ターミナルに向けて、環境依存しない綺麗な改行 (\r\n) を明示的に出力
+        xiao_console_print(env, "\r\n");
+        lines_to_show--;
+
+        // ファイル側の改行文字をスキップする
+        // Windows(\r\n), Mac(\r), Unix(\n) すべてに対応
+        if (i < size && data[i] == '\r') {
+            i++;
+            if (i < size && data[i] == '\n') {
+                i++; // \r\n の場合はさらに進める
+            }
+        } else if (i < size && data[i] == '\n') {
+            i++;
+        }
+    }
+
+    return 0;
+}
+
 #line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/ls.c"
 #include "xiao.h"
 
 int xiao_app_ls(xiao_env *env) {
-    xiao_size i;
+    xiao_size i = 0;
     int show_apps = 0;
+    const char *path = ".";
     if (xiao_argc(env) > 1 && xiao_argv(env, 1)[0] == '-' && xiao_argv(env, 1)[1] == 'a') {
         show_apps = 1;
+    } else if (xiao_argc(env) > 1) {
+        path = xiao_argv(env, 1);
     }
 
     if (show_apps) {
@@ -449,9 +2407,84 @@ int xiao_app_ls(xiao_env *env) {
         return 0;
     }
 
-    for (i = 0; i < xiao_file_count(); i++) {
-        xiao_console_print(env, xiao_file_name(i));
+    while (1) {
+        const char *name = 0;
+        int type = 0;
+        xiao_size size = 0;
+        if (xiao_fs_list(path, i, &name, &type, &size) != 0) break;
+        (void)type;
+        (void)size;
+        xiao_console_print(env, name);
         xiao_console_print(env, "\r\n");
+        i++;
+    }
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/mkdir.c"
+#include "xiao.h"
+
+int xiao_app_mkdir(xiao_env *env) {
+    int i;
+    if (xiao_argc(env) < 2) {
+        xiao_console_print(env, "usage: mkdir DIR...\r\n");
+        return 1;
+    }
+    for (i = 1; i < xiao_argc(env); i++) {
+        const char *path = xiao_argv(env, i);
+        if (xiao_fs_mkdir(path) != 0) {
+            xiao_console_print(env, "mkdir: failed: ");
+            xiao_console_print(env, path);
+            xiao_console_print(env, "\r\n");
+        }
+    }
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/mv.c"
+#include "xiao.h"
+
+int xiao_app_mv(xiao_env *env) {
+    if (xiao_argc(env) != 3) {
+        xiao_console_print(env, "usage: mv SRC DST\r\n");
+        return 1;
+    }
+    if (xiao_fs_rename(xiao_argv(env, 1), xiao_argv(env, 2)) != 0) {
+        xiao_console_print(env, "mv: failed\r\n");
+        return 1;
+    }
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/pwd.c"
+#include "xiao.h"
+
+int xiao_app_pwd(xiao_env *env) {
+    xiao_console_print(env, xiao_fs_cwd());
+    xiao_console_print(env, "\r\n");
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/rm.c"
+#include "xiao.h"
+
+int xiao_app_rm(xiao_env *env) {
+    int i;
+    if (xiao_argc(env) < 2) {
+        xiao_console_print(env, "usage: rm PATH...\r\n");
+        return 1;
+    }
+    for (i = 1; i < xiao_argc(env); i++) {
+        const char *path = xiao_argv(env, i);
+        if (xiao_fs_remove(path) != 0) {
+            xiao_console_print(env, "rm: failed: ");
+            xiao_console_print(env, path);
+            xiao_console_print(env, "\r\n");
+        }
     }
     return 0;
 }
@@ -591,7 +2624,7 @@ int xiao_app_terminal(xiao_env *env) {
             }
             if ((ch == 0x08 || ch == 0x7f) && n > 0) {
                 n--;
-                xiao_console_print(env, "\\b \\b");
+                xiao_console_print(env, "\b \b");
                 continue;
             }
             if (ch >= 32 && ch <= 126 && n + 1 < sizeof(line)) {
@@ -621,11 +2654,60 @@ int xiao_app_terminal(xiao_env *env) {
 }
 
 
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/top.c"
+#include "xiao.h"
+
+static void xiao_app_top__print_uint(xiao_env *env, xiao_size value) {
+    char buf[24];
+    xiao_size i = sizeof(buf);
+    buf[--i] = 0;
+    if (value == 0) {
+        xiao_console_print(env, "0");
+        return;
+    }
+    while (value && i > 0) {
+        buf[--i] = (char)('0' + (value % 10));
+        value /= 10;
+    }
+    xiao_console_print(env, &buf[i]);
+}
+
+int xiao_app_top(xiao_env *env) {
+    xiao_size i;
+    xiao_console_print(env, "pid state   app\r\n");
+    xiao_console_print(env, "0   run     ");
+    xiao_console_print(env, xiao_current_app());
+    if (env && env->ipc.from) {
+        xiao_console_print(env, " from ");
+        xiao_console_print(env, env->ipc.from);
+    }
+    xiao_console_print(env, "\r\n");
+
+    for (i = 0; i < xiao_task_slot_count(); i++) {
+        const char *name = xiao_task_name(i);
+        if (!name) continue;
+        xiao_app_top__print_uint(env, i + 1);
+        xiao_console_print(env, "   ready   ");
+        xiao_console_print(env, name);
+        xiao_console_print(env, "\r\n");
+    }
+
+    xiao_console_print(env, "tasks active/slots ");
+    xiao_app_top__print_uint(env, xiao_task_active_count());
+    xiao_console_print(env, "/");
+    xiao_app_top__print_uint(env, xiao_task_slot_count());
+    xiao_console_print(env, "\r\napps ");
+    xiao_app_top__print_uint(env, xiao_app_count());
+    xiao_console_print(env, "\r\n");
+    return 0;
+}
+
+
 #line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/xuexi.c"
 #include "xiao.h"
 
 int xiao_app_xuexi(xiao_env *env) {
-    xiao_serial_print(env, "Hello, World.\r\nXIEXI GUANGGUO WASUI WANWANSUI\r\n");
+    xiao_serial_print(env, "Hello, World.\r\nXIEXI QIANGGUO WANSUI WANWANSUI\r\n");
     return 0;
 }
 

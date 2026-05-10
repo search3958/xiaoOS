@@ -70,6 +70,20 @@ def file_sources(files_dir, ignore_path):
     return sorted(sources)
 
 
+def dir_entries(files_dir, ignore_path):
+    root = Path(files_dir)
+    rules = load_ignore(ignore_path)
+    entries = []
+    if not root.exists():
+        return entries
+    for path in root.rglob("*"):
+        if path.is_dir():
+            rel = path.relative_to(root).as_posix()
+            if not ignored(rel + "/", rules) and not ignored(rel, rules):
+                entries.append(rel + "/")
+    return sorted(entries)
+
+
 def app_name(src, apps_dir):
     rel = Path(src).relative_to(apps_dir).with_suffix("").as_posix()
     return rel
@@ -105,6 +119,7 @@ def generate(args):
     apps_dir = Path(args.apps_dir)
     files_dir = Path(args.files_dir)
     sources = app_sources(apps_dir, args.ignore)
+    dirs = dir_entries(files_dir, args.files_ignore)
     files = file_sources(files_dir, args.files_ignore)
     boot_text = Path(args.boot).read_text()
     out_path = Path(args.out)
@@ -132,6 +147,8 @@ def generate(args):
             out.write(f'    {{ "{c_escape(name)}", {symbol_for(name)} }},\n')
         out.write("};\n\n")
         out.write("static const xiao_file file_table[] = {\n")
+        for name in dirs:
+            out.write(f'    {{ "{c_escape(name)}", 0, 0 }},\n')
         for index, src in enumerate(files):
             name = file_name(src, files_dir)
             size = len(Path(src).read_bytes())

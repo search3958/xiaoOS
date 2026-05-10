@@ -16,15 +16,29 @@ terminalは入力された1行を `xiao_exec_line()` で起動メッセージに
 つまり `grep hello readme.txt` は，terminalからgrepアプリへ `argv = ["grep", "hello", "readme.txt"]` を送るIPCとして扱われます。
 
 ## ファイルと基本コマンド
-`files/` の中身はビルド時に埋め込みファイルシステムとしてOSイメージに入ります。
-除外したいファイルは `files/.xiaoignore` に書きます。
+`files/` の中身はビルド時に初期ファイルシステムとしてOSイメージに入ります。
+空フォルダを含むフォルダ構造もそのまま保持されます。
+除外したいファイルは `files/.xiaoignore` に書きます。`.xiaoignore` 自体はOSイメージには含めません。
+`make` 時には初期ファイルシステムを毎回再生成するため，`files/` 内の追加・削除・移動が反映されます。
+
+ファイルシステムはcoreに小さなヘルパーとして入り，実際の操作はアプリから呼び出します。
+これにより，Arduino/ESPではRAM上の小さな可変FSとして，PC/QEMUでは同じAPIのまま動きます。
 
 現在の基本コマンド:
-- `ls`: 埋め込みファイル一覧
+- `pwd`
+- `cd DIR`
+- `ls [DIR]`: ディレクトリ一覧
 - `ls -a`: app一覧
 - `cat FILE...`
+- `mkdir DIR...`
+- `cp SRC DST`: ファイルまたはディレクトリをコピー
+- `mv SRC DST`: ファイルまたはディレクトリを移動
+- `rm PATH...`: ファイルまたはディレクトリを削除
 - `grep PATTERN FILE...`
 - `sed s/OLD/NEW/ FILE...`
+- `top`: 実行中アプリと待機タスクを表示
+- `df`: xiaoFSのRAM/ノード/ROM使用量を表示
+- `free`: xiaoFS RAM，FSノード，タスク枠の空き状況を表示
 
 ## 対応ターゲット
 - Arduino Uno: `hal/arduino/xiaoOS/xiaoOS.ino`

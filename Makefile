@@ -6,8 +6,8 @@ BIOS_OBJCOPY := x86_64-elf-objcopy
 CLANG := clang
 LLD_LINK := lld-link
 NASM := nasm
-STAGE2_SECTORS := 32
-STAGE2_SIZE := 16384
+STAGE2_SECTORS := 128
+STAGE2_SIZE := 65536
 
 APP_SRCS := $(shell $(PYTHON) tools/gen_image.py --apps-dir apps --ignore apps/.xiaoignore --list-sources)
 FILE_SRCS := $(shell $(PYTHON) tools/gen_image.py --files-dir files --files-ignore files/.xiaoignore --list-files)
@@ -22,7 +22,7 @@ ARM64_UEFI_CFLAGS := -target aarch64-unknown-windows -Iinclude -Ihal/uefi -ffree
 
 .SECONDARY: $(WRAPPED_APP_SRCS)
 
-.PHONY: all pc bios uefi arm64 arduino esp32c3 esp32c3-upload esp32c3-monitor sync-sketches check clean
+.PHONY: all pc bios uefi arm64 arduino esp32c3 esp32c3-upload esp32c3-monitor sync-sketches check clean FORCE
 
 all: pc
 
@@ -39,7 +39,7 @@ arm64: $(BUILD)/arm64/BOOTAA64.EFI $(BUILD)/arm64/esp/EFI/BOOT/BOOTAA64.EFI
 $(BUILD)/bios $(BUILD)/uefi $(BUILD)/uefi/esp/EFI/BOOT $(BUILD)/arm64 $(BUILD)/arm64/esp/EFI/BOOT $(BUILD)/generated:
 	mkdir -p $@
 
-$(BUILD)/generated/image.c: boot/common/boot.txt tools/gen_image.py apps/.xiaoignore files/.xiaoignore $(APP_SRCS) $(FILE_SRCS) | $(BUILD)/generated
+$(BUILD)/generated/image.c: boot/common/boot.txt tools/gen_image.py apps/.xiaoignore files/.xiaoignore $(APP_SRCS) $(FILE_SRCS) FORCE | $(BUILD)/generated
 	$(PYTHON) tools/gen_image.py --boot boot/common/boot.txt --apps-dir apps --ignore apps/.xiaoignore --files-dir files --files-ignore files/.xiaoignore --out $@
 
 $(BUILD)/generated/apps/%.c: apps/%.c tools/wrap_app.py tools/gen_image.py | $(BUILD)/generated

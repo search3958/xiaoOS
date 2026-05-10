@@ -1,0 +1,6 @@
+# xiaoOS boot text
+exec hello
+wait 100
+exec serial_hello
+exec nihao
+wait forever

@@ -276,6 +276,7 @@ void xiao_yield(xiao_env *env) {
 #include "xiao.h"
 
 int xiao_app_cat(xiao_env *env);
+int xiao_app_gc9a01(xiao_env *env);
 int xiao_app_grep(xiao_env *env);
 int xiao_app_hello(xiao_env *env);
 int xiao_app_ls(xiao_env *env);
@@ -295,12 +296,16 @@ static const char boot_text[] =
     ;
 
 static const char file_0[] = {
+    10, 0
+};
+
+static const char file_1[] = {
     104, 101, 108, 108, 111, 32, 102, 114, 111, 109, 32, 120, 105, 97, 111, 70, 83, 10, 
     104, 101, 108, 108, 111, 32, 102, 114, 111, 109, 32, 97, 110, 32, 97, 112, 112, 45, 
     114, 101, 97, 100, 97, 98, 108, 101, 32, 102, 105, 108, 101, 10, 0
 };
 
-static const char file_1[] = {
+static const char file_2[] = {
     120, 105, 97, 111, 79, 83, 32, 101, 109, 98, 101, 100, 100, 101, 100, 32, 102, 105, 
     108, 101, 32, 115, 121, 115, 116, 101, 109, 10, 10, 84, 104, 105, 115, 32, 116, 101, 
     120, 116, 32, 105, 115, 32, 99, 111, 109, 112, 105, 108, 101, 100, 32, 105, 110, 116, 
@@ -313,6 +318,7 @@ static const char file_1[] = {
 
 static const xiao_app app_table[] = {
     { "cat", xiao_app_cat },
+    { "gc9a01", xiao_app_gc9a01 },
     { "grep", xiao_app_grep },
     { "hello", xiao_app_hello },
     { "ls", xiao_app_ls },
@@ -323,8 +329,9 @@ static const xiao_app app_table[] = {
 };
 
 static const xiao_file file_table[] = {
-    { "hello.txt", file_0, 50 },
-    { "readme.txt", file_1, 142 },
+    { "credit.txt", file_0, 1 },
+    { "hello.txt", file_1, 50 },
+    { "readme.txt", file_2, 142 },
 };
 
 const xiao_boot_image xiao_image = {
@@ -339,7 +346,7 @@ const xiao_boot_image xiao_image = {
 #include "xiao.h"
 
 static void xiao_app_cat__usage(xiao_env *env) {
-    xiao_console_print(env, "usage: cat FILE...\r\n");
+    xiao_console_print(env, "usage: cat FILENAME...\r\n");
 }
 
 int xiao_app_cat(xiao_env *env) {
@@ -353,18 +360,163 @@ int xiao_app_cat(xiao_env *env) {
         const char *data = 0;
         xiao_size size = 0;
         const char *name = xiao_argv(env, i);
+        
         if (xiao_file_read(name, &data, &size) != 0) {
             xiao_console_print(env, "cat: not found: ");
             xiao_console_print(env, name);
             xiao_console_print(env, "\r\n");
             continue;
         }
+
         xiao_console_write(env, data, size);
-        if (size == 0 || data[size - 1] != '\n') xiao_console_print(env, "\r\n");
+
+        if (size == 0 || data[size - 1] != '\n') {
+            xiao_console_print(env, "\r\n");
+        }
     }
     return 0;
 }
 
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/gc9a01.c"
+#include "xiao.h"
+#include <stdint.h>
+
+/* ESP32-S3 SPI2 (GPSPI2) レジスタ定義 */
+#define SPI_BASE                0x60002000
+#define SPI_CMD_REG            ((volatile uint32_t *)(SPI_BASE + 0x00))
+#define SPI_ADDR_REG           ((volatile uint32_t *)(SPI_BASE + 0x04))
+#define SPI_MS_DLEN_REG        ((volatile uint32_t *)(SPI_BASE + 0x1C))
+#define SPI_W0_REG             ((volatile uint32_t *)(SPI_BASE + 0x58))
+#define SPI_USER_REG           ((volatile uint32_t *)(SPI_BASE + 0x18))
+#define SPI_USER1_REG          ((volatile uint32_t *)(SPI_BASE + 0x1C))
+#define SPI_CLK_GATE_REG       ((volatile uint32_t *)(SPI_BASE + 0x7C))
+#define SPI_CLOCK_REG          ((volatile uint32_t *)(SPI_BASE + 0x08))
+#define SPI_MISC_REG           ((volatile uint32_t *)(SPI_BASE + 0x10))
+
+/* GPIO マトリックス設定 */
+#define GPIO_FUNC_OUT_BASE     0x60004554
+#define GPIO_FUNC_IN_BASE      0x60004154
+#define GPIO_OUT_W1TS_REG      ((volatile uint32_t *)0x60004008)
+#define GPIO_OUT_W1TC_REG      ((volatile uint32_t *)0x6000400C)
+#define GPIO_ENABLE_REG        ((volatile uint32_t *)0x60004020)
+#define GPIO_ENABLE1_REG       ((volatile uint32_t *)0x6000402C)
+
+/* ピン定義 (S3内部番号) */
+#define PIN_SCLK 36
+#define PIN_MOSI 35
+#define PIN_DC   4
+#define PIN_CS   10
+#define PIN_RST  2
+
+/* SPI2 信号番号 */
+#define FSPICLK_OUT_IDX 63
+#define FSPID_OUT_IDX   64
+#define FSPICS0_OUT_IDX 68
+
+static void xiao_app_gc9a01__spi_hw_init() {
+    // 1. SPI2 へのクロック供給を有効化
+    *SPI_CLK_GATE_REG |= (1 << 0) | (1 << 1); 
+
+    // 2. GPIOマトリックスでピンをSPI機能に紐付け
+    // SCLK (GPIO36)
+    *((volatile uint32_t *)(GPIO_FUNC_OUT_BASE + (PIN_SCLK * 4))) = FSPICLK_OUT_IDX;
+    // MOSI (GPIO35)
+    *((volatile uint32_t *)(GPIO_FUNC_OUT_BASE + (PIN_MOSI * 4))) = FSPID_OUT_IDX;
+    // CS (GPIO10)
+    *((volatile uint32_t *)(GPIO_FUNC_OUT_BASE + (PIN_CS * 4))) = FSPICS0_OUT_IDX;
+
+    // 3. 全ピンを出力に設定
+    *GPIO_ENABLE_REG  |= (1ULL << PIN_DC) | (1ULL << PIN_CS) | (1ULL << PIN_RST);
+    *GPIO_ENABLE1_REG |= (1ULL << (PIN_SCLK - 32)) | (1ULL << (PIN_MOSI - 32));
+
+    // 4. SPI クロック設定 (約40MHz: 80MHz / (1+1))
+    *SPI_CLOCK_REG = (0 << 12) | (0 << 6) | (1 << 0); 
+    
+    // 5. USERレジスタ設定 (フルデュプレックス, MOSI有効)
+    *SPI_USER_REG = (1 << 31) | (1 << 27) | (1 << 14) | (1 << 9); 
+}
+
+/* ハードウェアSPIで1〜4バイト送信 */
+static void xiao_app_gc9a01__spi_hw_send(uint32_t data, uint32_t bitlen) {
+    while (*SPI_CMD_REG & (1 << 31)); // ビジー待ち
+    *SPI_MS_DLEN_REG = bitlen - 1;    // 送信ビット長
+    *SPI_W0_REG = data;               // データをバッファへ (リトルエンディアン注意)
+    *SPI_CMD_REG |= (1 << 31);        // 送信開始
+    while (*SPI_CMD_REG & (1 << 31)); // 完了待ち
+}
+
+static void xiao_app_gc9a01__send_cmd(uint8_t c) {
+    *((volatile uint32_t *)0x6000400C) = (1 << PIN_DC); // DC LOW
+    xiao_app_gc9a01__spi_hw_send(c, 8);
+}
+
+static void xiao_app_gc9a01__send_data(uint8_t d) {
+    *((volatile uint32_t *)0x60004008) = (1 << PIN_DC); // DC HIGH
+    xiao_app_gc9a01__spi_hw_send(d, 8);
+}
+
+int xiao_app_gc9a01(xiao_env *env) {
+    xiao_console_print(env, "[GC9A01] Hardware SPI Direct Access Mode\r\n");
+
+    xiao_app_gc9a01__spi_hw_init();
+
+    // リセット
+    *((volatile uint32_t *)0x60004008) = (1 << PIN_RST); xiao_wait(env, 10);
+    *((volatile uint32_t *)0x6000400C) = (1 << PIN_RST); xiao_wait(env, 20);
+    *((volatile uint32_t *)0x60004008) = (1 << PIN_RST); xiao_wait(env, 150);
+
+    // GC9A01 初期化 (略)
+    xiao_app_gc9a01__send_cmd(0xEF);
+    xiao_app_gc9a01__send_cmd(0xEB); xiao_app_gc9a01__send_data(0x14);
+    xiao_app_gc9a01__send_cmd(0xFE);
+    xiao_app_gc9a01__send_cmd(0xEF);
+    xiao_app_gc9a01__send_cmd(0xEB); xiao_app_gc9a01__send_data(0x14);
+    xiao_app_gc9a01__send_cmd(0x84); xiao_app_gc9a01__send_data(0x40);
+    xiao_app_gc9a01__send_cmd(0x85); xiao_app_gc9a01__send_data(0xFF);
+    xiao_app_gc9a01__send_cmd(0x86); xiao_app_gc9a01__send_data(0xFF);
+    xiao_app_gc9a01__send_cmd(0x87); xiao_app_gc9a01__send_data(0xFF);
+    xiao_app_gc9a01__send_cmd(0x88); xiao_app_gc9a01__send_data(0x0A);
+    xiao_app_gc9a01__send_cmd(0x89); xiao_app_gc9a01__send_data(0x21);
+    xiao_app_gc9a01__send_cmd(0x8A); xiao_app_gc9a01__send_data(0x00);
+    xiao_app_gc9a01__send_cmd(0x8B); xiao_app_gc9a01__send_data(0x80);
+    xiao_app_gc9a01__send_cmd(0x8C); xiao_app_gc9a01__send_data(0x01);
+    xiao_app_gc9a01__send_cmd(0x8D); xiao_app_gc9a01__send_data(0x01);
+    xiao_app_gc9a01__send_cmd(0x8E); xiao_app_gc9a01__send_data(0xFF);
+    xiao_app_gc9a01__send_cmd(0x8F); xiao_app_gc9a01__send_data(0xFF);
+    xiao_app_gc9a01__send_cmd(0xB6); xiao_app_gc9a01__send_data(0x00); xiao_app_gc9a01__send_data(0x20);
+    xiao_app_gc9a01__send_cmd(0x36); xiao_app_gc9a01__send_data(0x08);
+    xiao_app_gc9a01__send_cmd(0x3A); xiao_app_gc9a01__send_data(0x05);
+    xiao_app_gc9a01__send_cmd(0x90); xiao_app_gc9a01__send_data(0x08); xiao_app_gc9a01__send_data(0x08); xiao_app_gc9a01__send_data(0x08); xiao_app_gc9a01__send_data(0x08);
+    xiao_app_gc9a01__send_cmd(0xBD); xiao_app_gc9a01__send_data(0x06);
+    xiao_app_gc9a01__send_cmd(0xBC); xiao_app_gc9a01__send_data(0x00);
+    xiao_app_gc9a01__send_cmd(0xFF); xiao_app_gc9a01__send_data(0x60); xiao_app_gc9a01__send_data(0x01); xiao_app_gc9a01__send_data(0x04);
+    xiao_app_gc9a01__send_cmd(0xC3); xiao_app_gc9a01__send_data(0x13);
+    xiao_app_gc9a01__send_cmd(0xC4); xiao_app_gc9a01__send_data(0x13);
+    xiao_app_gc9a01__send_cmd(0xC9); xiao_app_gc9a01__send_data(0x22);
+    xiao_app_gc9a01__send_cmd(0xBE); xiao_app_gc9a01__send_data(0x11);
+    xiao_app_gc9a01__send_cmd(0xE1); xiao_app_gc9a01__send_data(0x10); xiao_app_gc9a01__send_data(0x0E);
+    xiao_app_gc9a01__send_cmd(0xDF); xiao_app_gc9a01__send_data(0x21); xiao_app_gc9a01__send_data(0x0C); xiao_app_gc9a01__send_data(0x02);
+    xiao_app_gc9a01__send_cmd(0x21); 
+    xiao_app_gc9a01__send_cmd(0x11);
+    xiao_wait(env, 120);
+    xiao_app_gc9a01__send_cmd(0x29);
+
+    // 描画
+    xiao_app_gc9a01__send_cmd(0x2A); xiao_app_gc9a01__send_data(0); xiao_app_gc9a01__send_data(0); xiao_app_gc9a01__send_data(0); xiao_app_gc9a01__send_data(239);
+    xiao_app_gc9a01__send_cmd(0x2B); xiao_app_gc9a01__send_data(0); xiao_app_gc9a01__send_data(0); xiao_app_gc9a01__send_data(0); xiao_app_gc9a01__send_data(239);
+    xiao_app_gc9a01__send_cmd(0x2C);
+
+    *((volatile uint32_t *)0x60004008) = (1 << PIN_DC); 
+
+    for (int i = 0; i < 240 * 240; i++) {
+        // 緑色 (0x07E0) を送る。レジスタW0はリトルエンディアンなので順序注意。
+        xiao_app_gc9a01__spi_hw_send(0xE007, 16); 
+        if (i % 240 == 0) xiao_yield(env);
+    }
+
+    xiao_console_print(env, "[GC9A01] Hardware SPI: Done.\r\n");
+    while(1) xiao_yield(env);
+}
 
 #line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/grep.c"
 #include "xiao.h"
@@ -591,7 +743,7 @@ int xiao_app_terminal(xiao_env *env) {
             }
             if ((ch == 0x08 || ch == 0x7f) && n > 0) {
                 n--;
-                xiao_console_print(env, "\\b \\b");
+                xiao_console_print(env, "\b \b");
                 continue;
             }
             if (ch >= 32 && ch <= 126 && n + 1 < sizeof(line)) {
@@ -625,7 +777,7 @@ int xiao_app_terminal(xiao_env *env) {
 #include "xiao.h"
 
 int xiao_app_xuexi(xiao_env *env) {
-    xiao_serial_print(env, "Hello, World.\r\nXIEXI GUANGGUO WASUI WANWANSUI\r\n");
+    xiao_serial_print(env, "Hello, World.\r\nXIEXI QIANGGUO WANSUI WANWANSUI\r\n");
     return 0;
 }
 

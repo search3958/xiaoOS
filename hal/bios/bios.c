@@ -11,8 +11,10 @@ typedef unsigned int u32;
 static u16 *const vga = (u16 *)0xb8000;
 static u32 row;
 static u32 col;
+static int esc_state;
 
 static void console_putc(char c);
+static void console_clear(void);
 
 static void outb(u16 port, u8 value) {
     __asm__ __volatile__("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -55,7 +57,45 @@ static void scroll_if_needed(void) {
     row = VGA_H - 1;
 }
 
+static void console_clear(void) {
+    u32 i;
+    for (i = 0; i < VGA_W * VGA_H; i++) vga[i] = 0x0720;
+    row = 0;
+    col = 0;
+}
+
 static void console_putc(char c) {
+    if (esc_state == 1) {
+        if (c == '[') {
+            esc_state = 2;
+            return;
+        }
+        esc_state = 0;
+    } else if (esc_state == 2) {
+        if (c == 'H') {
+            row = 0;
+            col = 0;
+            esc_state = 0;
+            return;
+        }
+        if (c == '2') {
+            esc_state = 3;
+            return;
+        }
+        esc_state = 0;
+    } else if (esc_state == 3) {
+        if (c == 'J') {
+            console_clear();
+            esc_state = 0;
+            return;
+        }
+        esc_state = 0;
+    }
+    if ((u8)c == 0x1b) {
+        esc_state = 1;
+        return;
+    }
+
     if (c == '\r') return;
     if (c == '\n') {
         row++;

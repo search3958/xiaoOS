@@ -12,6 +12,7 @@ u8 uefi_inb(u16 port);
 #endif
 
 static EFI_SYSTEM_TABLE *st;
+static int esc_state;
 
 typedef struct {
     u16 ScanCode;
@@ -25,18 +26,55 @@ typedef struct {
     XIAO_EFI_READ_KEY_STROKE ReadKeyStroke;
 } XIAO_EFI_SIMPLE_TEXT_INPUT_PROTOCOL;
 
+static void uefi_putc(char c) {
+    if (st && st->ConOut && st->ConOut->OutputString) {
+        CHAR16 out[2];
+        out[0] = (CHAR16)c;
+        out[1] = 0;
+        st->ConOut->OutputString(st->ConOut, out);
+    }
+}
+
 static void uefi_console_write(const char *data, xiao_size len) {
-    CHAR16 buf[96];
-    xiao_size i = 0;
-    while (i < len) {
-        xiao_size n = 0;
-        while (i < len && n + 1 < sizeof(buf) / sizeof(buf[0])) {
-            buf[n++] = (CHAR16)data[i++];
+    xiao_size i;
+    for (i = 0; i < len; i++) {
+        char c = data[i];
+        if (esc_state == 1) {
+            if (c == '[') {
+                esc_state = 2;
+                continue;
+            }
+            esc_state = 0;
+        } else if (esc_state == 2) {
+            if (c == 'H') {
+                if (st && st->ConOut && st->ConOut->SetCursorPosition) {
+                    st->ConOut->SetCursorPosition(st->ConOut, 0, 0);
+                }
+                esc_state = 0;
+                continue;
+            }
+            if (c == '2') {
+                esc_state = 3;
+                continue;
+            }
+            esc_state = 0;
+        } else if (esc_state == 3) {
+            if (c == 'J') {
+                if (st && st->ConOut && st->ConOut->ClearScreen) {
+                    st->ConOut->ClearScreen(st->ConOut);
+                }
+                esc_state = 0;
+                continue;
+            }
+            esc_state = 0;
         }
-        buf[n] = 0;
-        if (st && st->ConOut && st->ConOut->OutputString) {
-            st->ConOut->OutputString(st->ConOut, buf);
+
+        if ((u8)c == 0x1b) {
+            esc_state = 1;
+            continue;
         }
+
+        uefi_putc(c);
     }
 }
 

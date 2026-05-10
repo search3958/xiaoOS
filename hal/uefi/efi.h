@@ -17,15 +17,34 @@ typedef struct {
 } EFI_TABLE_HEADER;
 
 struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
+struct SIMPLE_TEXT_OUTPUT_MODE;
 
 typedef EFI_STATUS (*EFI_TEXT_STRING)(
     struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *self,
     CHAR16 *string
 );
 
+typedef EFI_STATUS (*EFI_TEXT_CLEAR_SCREEN)(
+    struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *self
+);
+
+typedef EFI_STATUS (*EFI_TEXT_SET_CURSOR_POSITION)(
+    struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *self,
+    UINTN column,
+    UINTN row
+);
+
 typedef struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL {
     void *Reset;
     EFI_TEXT_STRING OutputString;
+    void *TestString;
+    void *QueryMode;
+    void *SetMode;
+    void *SetAttribute;
+    EFI_TEXT_CLEAR_SCREEN ClearScreen;
+    EFI_TEXT_SET_CURSOR_POSITION SetCursorPosition;
+    void *EnableCursor;
+    struct SIMPLE_TEXT_OUTPUT_MODE *Mode;
 } EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
 
 typedef struct {

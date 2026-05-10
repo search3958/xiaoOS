@@ -74,7 +74,15 @@ static void console_putc(char c) {
 
 static void bios_console_write(const char *data, xiao_size len) {
     xiao_size i;
-    for (i = 0; i < len; i++) console_putc(data[i]);
+    for (i = 0; i < len; i++) {
+        console_putc(data[i]);
+        serial_putc(data[i]);
+    }
+}
+
+static int bios_input_read(void) {
+    if ((inb(COM1 + 5) & 0x01) == 0) return -1;
+    return (int)inb(COM1);
 }
 
 static void bios_wait_ms(xiao_tick ms) {
@@ -91,6 +99,7 @@ static void bios_yield(void) {
 static const xiao_hal bios_hal = {
     bios_serial_write,
     bios_console_write,
+    bios_input_read,
     bios_wait_ms,
     bios_yield,
 };

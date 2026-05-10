@@ -3,7 +3,7 @@ set -eu
 
 cd "$(dirname "$0")"
 
-FQBN="${FQBN:-esp32:esp32:esp32c3:CDCOnBoot=cdc}"
+FQBN="${FQBN:-esp32:esp32:esp32s3:CDCOnBoot=cdc}"
 BAUD="${BAUD:-115200}"
 ACTION="${1:-upload-monitor}"
 

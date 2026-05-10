@@ -9,20 +9,17 @@ start:
     cli
     xor ax, ax
     mov ds, ax
+    mov es, ax
     mov ss, ax
     mov sp, 0x7c00
     mov [boot_drive], dl
     sti
 
-    mov ax, 0x1000
-    mov es, ax
-    xor bx, bx
-    mov ah, 0x02
-    mov al, STAGE2_SECTORS
-    mov ch, 0
-    mov cl, 2
-    mov dh, 0
+    call serial_init
+
     mov dl, [boot_drive]
+    mov si, dap
+    mov ah, 0x42
     int 0x13
     jc disk_error
 
@@ -35,6 +32,8 @@ start:
 
 disk_error:
     mov si, disk_msg
+    call serial_print
+    mov si, disk_msg
 .print:
     lodsb
     test al, al
@@ -46,8 +45,66 @@ disk_error:
     hlt
     jmp .hang
 
+serial_init:
+    mov dx, 0x3f9
+    xor al, al
+    out dx, al
+    mov dx, 0x3fb
+    mov al, 0x80
+    out dx, al
+    mov dx, 0x3f8
+    mov al, 0x01
+    out dx, al
+    mov dx, 0x3f9
+    xor al, al
+    out dx, al
+    mov dx, 0x3fb
+    mov al, 0x03
+    out dx, al
+    mov dx, 0x3fa
+    mov al, 0xc7
+    out dx, al
+    mov dx, 0x3fc
+    mov al, 0x0b
+    out dx, al
+    ret
+
+serial_putc:
+    push ax
+    push dx
+.wait:
+    mov dx, 0x3fd
+    in al, dx
+    test al, 0x20
+    jz .wait
+    mov dx, 0x3f8
+    mov al, bl
+    out dx, al
+    pop dx
+    pop ax
+    ret
+
+serial_print:
+    lodsb
+    test al, al
+    jz .done
+    mov bl, al
+    call serial_putc
+    jmp serial_print
+.done:
+    ret
+
 boot_drive: db 0
-disk_msg: db "xiaoOS disk read failed", 0
+disk_msg: db "xiaoOS disk read failed", 13, 10, 0
+
+align 4
+dap:
+    db 0x10
+    db 0
+    dw STAGE2_SECTORS
+    dw 0
+    dw 0x1000
+    dq 1
 
 gdt_start:
     dq 0

@@ -14,6 +14,11 @@ static void esp32c3_wait_ms(xiao_tick ms) {
     delay((unsigned long)ms);
 }
 
+static int esp32c3_input_read(void) {
+    if (Serial.available() <= 0) return -1;
+    return (int)Serial.read();
+}
+
 static void esp32c3_yield(void) {
     yield();
 }
@@ -21,6 +26,7 @@ static void esp32c3_yield(void) {
 static const xiao_hal esp32c3_hal = {
     esp32c3_serial_write,
     esp32c3_serial_write,
+    esp32c3_input_read,
     esp32c3_wait_ms,
     esp32c3_yield,
 };

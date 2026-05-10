@@ -6,6 +6,6 @@ make bios
 
 exec qemu-system-i386 \
     -drive file=build/bios/xiao-bios.img,format=raw \
-    -serial vc \
+    -nographic \
     -monitor none \
     -no-reboot

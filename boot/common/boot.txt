@@ -1,7 +1,7 @@
 # xiaoOS boot text
 exec hello
 wait 100
-exec serial_hello
+exec terminal
 exec nihao
 exec xuexi
 wait forever

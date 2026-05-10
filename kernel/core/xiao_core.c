@@ -9,6 +9,7 @@ typedef struct {
 
 static xiao_task tasks[XIAO_MAX_TASKS];
 static xiao_env current_env;
+static const xiao_boot_image *current_image;
 
 static xiao_size xiao_strlen(const char *s) {
     xiao_size n = 0;
@@ -116,6 +117,7 @@ static void xiao_run_boot_text(const xiao_boot_image *image) {
 void xiao_start(const xiao_hal *hal, const xiao_boot_image *image) {
     xiao_size i;
     current_env.hal = hal;
+    current_image = image;
     for (i = 0; i < XIAO_MAX_TASKS; i++) tasks[i].active = 0;
     if (image) xiao_run_boot_text(image);
     while (1) xiao_wait(&current_env, 1000);
@@ -131,6 +133,20 @@ void xiao_console_print(xiao_env *env, const char *text) {
     if (env && env->hal && env->hal->console_write) {
         env->hal->console_write(text, xiao_strlen(text));
     }
+}
+
+int xiao_input_read(xiao_env *env) {
+    if (env && env->hal && env->hal->input_read) return env->hal->input_read();
+    return -1;
+}
+
+int xiao_exec_app(const char *name) {
+    const xiao_app *app;
+    if (!current_image || !name) return -1;
+    app = xiao_find_app(current_image, name);
+    if (!app) return -1;
+    xiao_run_app(app);
+    return 0;
 }
 
 void xiao_wait(xiao_env *env, xiao_tick ms) {

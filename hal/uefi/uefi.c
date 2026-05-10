@@ -13,6 +13,18 @@ u8 uefi_inb(u16 port);
 
 static EFI_SYSTEM_TABLE *st;
 
+typedef struct {
+    u16 ScanCode;
+    CHAR16 UnicodeChar;
+} XIAO_EFI_INPUT_KEY;
+
+typedef EFI_STATUS (*XIAO_EFI_READ_KEY_STROKE)(void *self, XIAO_EFI_INPUT_KEY *key);
+
+typedef struct {
+    void *Reset;
+    XIAO_EFI_READ_KEY_STROKE ReadKeyStroke;
+} XIAO_EFI_SIMPLE_TEXT_INPUT_PROTOCOL;
+
 static void uefi_console_write(const char *data, xiao_size len) {
     CHAR16 buf[96];
     xiao_size i = 0;
@@ -57,6 +69,18 @@ static void uefi_serial_write(const char *data, xiao_size len) {
 #endif
 }
 
+static int uefi_input_read(void) {
+    XIAO_EFI_INPUT_KEY key;
+    XIAO_EFI_SIMPLE_TEXT_INPUT_PROTOCOL *in;
+    if (!st || !st->ConIn) return -1;
+    in = (XIAO_EFI_SIMPLE_TEXT_INPUT_PROTOCOL *)st->ConIn;
+    if (!in->ReadKeyStroke) return -1;
+    if (in->ReadKeyStroke(in, &key) != EFI_SUCCESS) return -1;
+    if (key.UnicodeChar != 0) return (int)key.UnicodeChar;
+    if (key.ScanCode == 0x17) return '\n';
+    return -1;
+}
+
 static void uefi_wait_ms(xiao_tick ms) {
     volatile unsigned long i;
     while (ms--) {
@@ -70,6 +94,7 @@ static void uefi_yield(void) {
 static const xiao_hal uefi_hal = {
     uefi_serial_write,
     uefi_console_write,
+    uefi_input_read,
     uefi_wait_ms,
     uefi_yield,
 };

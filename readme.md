@@ -20,3 +20,8 @@ OS本体は `boot.txt` 起動テキストを読み，`exec` / `spawn` / `wait` �
 ArduinoにはUEFI/BIOSがないため，Arduinoではreset後にスケッチが直接 `xiao_start()` を呼びます。
 PCではBIOS boot sectorまたはUEFI applicationが同じ `xiao_start()` を呼びます。
 つまり「同じOS」とは，同じcore，同じapp API，同じboot.txt実行モデルを共有するという意味です。
+
+## QEMU
+- `./32.sh`: x86 BIOS。BIOS版は確認しやすさ優先で `-nographic` 起動です。
+- `./64.sh`: x86_64 UEFI。QEMU画面にOS出力します。
+- `./arm.sh`: AArch64 UEFI。QEMU virt向けにUSB/virtio keyboardを明示しています。

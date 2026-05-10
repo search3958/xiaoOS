@@ -15,6 +15,7 @@ typedef struct {
 typedef struct {
     void (*serial_write)(const char *data, xiao_size len);
     void (*console_write)(const char *data, xiao_size len);
+    int (*input_read)(void);
     void (*wait_ms)(xiao_tick ms);
     void (*yield)(void);
 } xiao_hal;
@@ -32,6 +33,8 @@ typedef struct {
 void xiao_start(const xiao_hal *hal, const xiao_boot_image *image);
 void xiao_serial_print(xiao_env *env, const char *text);
 void xiao_console_print(xiao_env *env, const char *text);
+int xiao_input_read(xiao_env *env);
+int xiao_exec_app(const char *name);
 void xiao_wait(xiao_env *env, xiao_tick ms);
 void xiao_yield(xiao_env *env);
 

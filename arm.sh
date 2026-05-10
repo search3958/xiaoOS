@@ -30,6 +30,11 @@ exec qemu-system-aarch64 \
     -cpu cortex-a72 \
     -m 512M \
     -device ramfb \
+    -device qemu-xhci \
+    -device usb-kbd \
+    -device usb-tablet \
+    -device virtio-keyboard-device \
+    -device virtio-tablet-device \
     -bios "$code" \
     -drive if=none,id=hd0,file=fat:rw:build/arm64/esp,format=raw \
     -device virtio-blk-device,drive=hd0 \

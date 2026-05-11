@@ -2,7 +2,7 @@
 exec clear
 exec hello
 wait 100
-exec terminal
+exec mode cli
 exec nihao
 exec xuexi
 wait forever

@@ -14,6 +14,12 @@
 #define TERM_CURSOR_COLOR 0xE8EEF6u
 #define TTF_ARENA_SIZE (128 * 1024)
 
+enum {
+    TERM_ACTION_NONE = 0,
+    TERM_ACTION_REBOOT = 2,
+    TERM_ACTION_SHUTDOWN = 3
+};
+
 static int streq(const char *a, const char *b) {
     while (*a && *b && *a == *b) {
         a++;
@@ -34,6 +40,24 @@ static int parse_mode_name(const char *s) {
     if (streq(s, "cli")) return XIAO_MODE_CLI;
     if (streq(s, "gui")) return XIAO_MODE_GUI;
     return -1;
+}
+
+static int token_streq(const char *line, const char *word) {
+    xiao_size i = 0;
+    if (!line || !word) return 0;
+    while (word[i]) {
+        if (line[i] != word[i]) return 0;
+        i++;
+    }
+    return line[i] == 0 || line[i] == ' ' || line[i] == '\t';
+}
+
+static int terminal_action_for_line(const char *line) {
+    if (token_streq(line, "reboot")) return TERM_ACTION_REBOOT;
+    if (token_streq(line, "shutdown")) return TERM_ACTION_SHUTDOWN;
+    if (token_streq(line, "poweroff")) return TERM_ACTION_SHUTDOWN;
+    if (token_streq(line, "halt")) return TERM_ACTION_SHUTDOWN;
+    return TERM_ACTION_NONE;
 }
 
 static int run_text_terminal(xiao_env *env);
@@ -179,6 +203,8 @@ typedef struct {
     int screen_w;
     int screen_h;
     int esc_state;
+    int csi_len;
+    char csi_buf[16];
     int line_count;
     int line_len[TERM_LINE_COUNT];
     char lines[TERM_LINE_COUNT][TERM_LINE_MAX];
@@ -190,6 +216,7 @@ typedef struct {
     int input_dirty;
     int cursor_prev_x;
     int input_row_init;
+    int input_row;
     int prev_input_len;
     char prev_input[TERM_INPUT_MAX + 1];
     unsigned char dirty_rows[TERM_LINE_COUNT];
@@ -202,6 +229,8 @@ static void cli_mark_all_output_dirty(cli_term_state *st) {
     for (i = 0; i < TERM_LINE_COUNT; i++) st->dirty_rows[i] = 0;
     for (i = 0; i < st->output_rows; i++) st->dirty_rows[i] = 1;
     st->output_dirty_all = 1;
+    st->input_row_init = 0;
+    st->input_row = -1;
 }
 
 static void cli_mark_output_row_dirty(cli_term_state *st, int row) {
@@ -214,9 +243,15 @@ static void cli_mark_history_line_dirty(cli_term_state *st, int history_index) {
     cli_mark_output_row_dirty(st, row);
 }
 
+static void cli_mark_input_line_dirty(cli_term_state *st) {
+    int row = st->line_count - st->view_start;
+    cli_mark_output_row_dirty(st, row);
+}
+
 static int cli_sync_view(cli_term_state *st) {
     int old = st->view_start;
-    int max_start = st->line_count - st->output_rows;
+    int total_lines = st->line_count + 1;
+    int max_start = total_lines - st->output_rows;
     if (max_start < 0) max_start = 0;
     st->view_start = max_start;
     if (st->view_start != old) {
@@ -236,7 +271,7 @@ static void cli_clear_history(cli_term_state *st) {
         st->lines[i][0] = 0;
     }
     cli_mark_all_output_dirty(st);
-    st->input_dirty = 1;
+    st->input_dirty = 0;
     st->input_row_init = 0;
 }
 
@@ -252,6 +287,7 @@ static void cli_new_line(cli_term_state *st) {
         if (!view_changed) {
             cli_mark_history_line_dirty(st, st->line_count - 2);
             cli_mark_history_line_dirty(st, st->line_count - 1);
+            cli_mark_input_line_dirty(st);
         }
     } else {
         for (i = 1; i < TERM_LINE_COUNT; i++) {
@@ -293,24 +329,51 @@ static void cli_feed_output(cli_term_state *st, const char *data, xiao_size len)
 
     for (i = 0; i < len; i++) {
         unsigned char c = (unsigned char)data[i];
-
         if (st->esc_state == 1) {
-            st->esc_state = (c == '[') ? 2 : 0;
-            continue;
-        }
-        if (st->esc_state == 2) {
-            if (c == '2') {
-                st->esc_state = 3;
+            if (c == '[') {
+                st->esc_state = 2;
+                st->csi_len = 0;
+                st->csi_buf[0] = 0;
             } else {
                 st->esc_state = 0;
             }
             continue;
         }
-        if (st->esc_state == 3) {
-            if (c == 'J') {
-                cli_clear_history(st);
+        if (st->esc_state == 2) {
+            if (c >= 0x40 && c <= 0x7e) {
+                int p0 = 0;
+                int has_digit = 0;
+                int k = 0;
+                st->csi_buf[st->csi_len] = 0;
+                while (st->csi_buf[k] && st->csi_buf[k] != ';') {
+                    if (st->csi_buf[k] >= '0' && st->csi_buf[k] <= '9') {
+                        has_digit = 1;
+                        p0 = p0 * 10 + (st->csi_buf[k] - '0');
+                    } else {
+                        has_digit = 0;
+                        break;
+                    }
+                    k++;
+                }
+                if (c == 'J') {
+                    if (!has_digit || p0 == 2 || p0 == 3) {
+                        cli_clear_history(st);
+                    }
+                } else if (c == 'H' || c == 'f') {
+                    cli_mark_all_output_dirty(st);
+                }
+                st->esc_state = 0;
+                st->csi_len = 0;
+                continue;
+            }
+            if ((c >= '0' && c <= '9') || c == ';' || c == '?') {
+                if (st->csi_len + 1 < (int)sizeof(st->csi_buf)) {
+                    st->csi_buf[st->csi_len++] = (char)c;
+                }
+                continue;
             }
             st->esc_state = 0;
+            st->csi_len = 0;
             continue;
         }
 
@@ -437,86 +500,89 @@ static int output_y_for_row(cli_term_state *st, int row) {
     return TERM_MARGIN + row * st->line_height;
 }
 
-static int input_y(cli_term_state *st) {
-    return TERM_MARGIN + st->output_rows * st->line_height;
-}
-
 static void render_output_row(cli_term_state *st, int row) {
     int y;
     int h;
-    int hist_idx;
+    int idx;
     y = output_y_for_row(st, row);
     h = st->line_height;
-    xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
-    hist_idx = st->view_start + row;
-    if (hist_idx >= 0 && hist_idx < st->line_count) {
-        draw_text(st, TERM_MARGIN, y, st->lines[hist_idx], TERM_TEXT_COLOR);
-    }
-}
-
-static void render_input_layer(cli_term_state *st) {
-    int y = input_y(st);
-    int h = st->line_height;
-    int prompt_x = TERM_MARGIN + (int)(st->scale * 10.0f);
-    int old_width = text_width_n(st, st->prev_input, st->prev_input_len);
-    int new_width = text_width(st, st->input);
-    int prefix = common_prefix_len(st->prev_input, st->input);
-    int redraw_from = prefix > 0 ? prefix - 1 : 0;
-    int redraw_x = prompt_x + text_width_n(st, st->input, redraw_from);
-    int clear_end = prompt_x + (old_width > new_width ? old_width : new_width) + 12;
-    int cursor_x;
-
-    if (!st->input_row_init) {
+    idx = st->view_start + row;
+    if (idx >= 0 && idx < st->line_count) {
         xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
-        draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
-        draw_text(st, prompt_x, y, st->input, TERM_INPUT_COLOR);
-        st->input_row_init = 1;
-    } else {
-        if (redraw_x < prompt_x) redraw_x = prompt_x;
-        if (clear_end < redraw_x + 12) clear_end = redraw_x + 12;
-        if (clear_end > st->screen_w) clear_end = st->screen_w;
-        xiao_video_fill_rect_rgb888(st->env, redraw_x, y, clear_end - redraw_x, h, TERM_BG_COLOR);
-        draw_text_from_index(st, prompt_x, y, st->input, redraw_from, TERM_INPUT_COLOR);
+        draw_text(st, TERM_MARGIN, y, st->lines[idx], TERM_TEXT_COLOR);
+        return;
     }
+    if (idx == st->line_count) {
+        int prompt_x = TERM_MARGIN + (int)(st->scale * 10.0f);
+        int old_width = text_width_n(st, st->prev_input, st->prev_input_len);
+        int new_width = text_width(st, st->input);
+        int prefix = common_prefix_len(st->prev_input, st->input);
+        int redraw_from = prefix > 0 ? prefix - 1 : 0;
+        int redraw_x = prompt_x + text_width_n(st, st->input, redraw_from);
+        int clear_end = prompt_x + (old_width > new_width ? old_width : new_width) + 12;
+        int cursor_x;
 
-    cursor_x = prompt_x + new_width;
-    xiao_video_fill_rect_rgb888(st->env, cursor_x, y + h - 4, 10, 2, TERM_CURSOR_COLOR);
-    st->cursor_prev_x = cursor_x;
-    st->prev_input_len = st->input_len;
-    {
-        int i;
-        for (i = 0; i < TERM_INPUT_MAX; i++) {
-            st->prev_input[i] = st->input[i];
-            if (st->input[i] == 0) break;
+        if (st->input_row != row) {
+            st->input_row = row;
+            st->input_row_init = 0;
         }
-        st->prev_input[TERM_INPUT_MAX] = 0;
+
+        if (!st->input_row_init) {
+            xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
+            draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
+            draw_text(st, prompt_x, y, st->input, TERM_INPUT_COLOR);
+            st->input_row_init = 1;
+        } else {
+            if (redraw_x < prompt_x) redraw_x = prompt_x;
+            if (clear_end < redraw_x + 12) clear_end = redraw_x + 12;
+            if (clear_end > st->screen_w) clear_end = st->screen_w;
+            xiao_video_fill_rect_rgb888(st->env, redraw_x, y, clear_end - redraw_x, h, TERM_BG_COLOR);
+            draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
+            draw_text_from_index(st, prompt_x, y, st->input, redraw_from, TERM_INPUT_COLOR);
+        }
+
+        cursor_x = prompt_x + new_width;
+        xiao_video_fill_rect_rgb888(st->env, cursor_x, y + h - 4, 10, 2, TERM_CURSOR_COLOR);
+        st->cursor_prev_x = cursor_x;
+        st->prev_input_len = st->input_len;
+        {
+            int i;
+            for (i = 0; i < TERM_INPUT_MAX; i++) {
+                st->prev_input[i] = st->input[i];
+                if (st->input[i] == 0) break;
+            }
+            st->prev_input[TERM_INPUT_MAX] = 0;
+        }
+        return;
     }
+    xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
 }
 
 static void cli_render_dirty(cli_term_state *st) {
     int i;
+    if (st->input_dirty) {
+        cli_mark_input_line_dirty(st);
+        st->input_dirty = 0;
+    }
     for (i = 0; i < st->output_rows; i++) {
         if (!st->dirty_rows[i]) continue;
         render_output_row(st, i);
         st->dirty_rows[i] = 0;
     }
     st->output_dirty_all = 0;
-    if (st->input_dirty) {
-        render_input_layer(st);
-        st->input_dirty = 0;
-    }
 }
 
 static void cli_init_layers(cli_term_state *st) {
-    st->output_rows = (st->screen_h - TERM_MARGIN * 2 - st->line_height) / st->line_height;
+    st->output_rows = (st->screen_h - TERM_MARGIN * 2) / st->line_height;
     if (st->output_rows < 1) st->output_rows = 1;
     if (st->output_rows > TERM_LINE_COUNT - 1) st->output_rows = TERM_LINE_COUNT - 1;
 
     st->view_start = 0;
     st->cursor_prev_x = -1;
     st->output_dirty_all = 0;
-    st->input_dirty = 1;
+    st->input_dirty = 0;
     st->input_row_init = 0;
+    st->input_row = -1;
     st->prev_input_len = 0;
     st->prev_input[0] = 0;
     xiao_video_fill_rect_rgb888(st->env, 0, 0, st->screen_w, st->screen_h, TERM_BG_COLOR);
@@ -535,6 +601,7 @@ static int cli_sink(void *ctx, const char *data, xiao_size len) {
 static int run_text_terminal(xiao_env *env) {
     char line[128];
     xiao_size n = 0;
+    int action = TERM_ACTION_NONE;
 
     xiao_console_print(env, "xiao terminal ready\r\n");
     xiao_console_print(env, "type command (example: ls, cat readme.txt), or 'exit'\r\n");
@@ -572,6 +639,8 @@ static int run_text_terminal(xiao_env *env) {
 
         line[n] = 0;
         if (n == 0) continue;
+        action = terminal_action_for_line(line);
+        if (action != TERM_ACTION_NONE) return action;
         if (streq(line, "exit")) break;
 
         if (xiao_exec_line(line) != 0) {
@@ -582,7 +651,7 @@ static int run_text_terminal(xiao_env *env) {
     }
 
     xiao_console_print(env, "terminal closed\r\n");
-    return 0;
+    return TERM_ACTION_NONE;
 }
 
 #ifdef XIAO_TTF_TERMINAL_DISABLED
@@ -597,6 +666,7 @@ static int run_cli_terminal(xiao_env *env) {
     int ascent = 0;
     int descent = 0;
     int line_gap = 0;
+    int action = TERM_ACTION_NONE;
     cli_term_state *st = &cli_state;
 
     if (xiao_platform(env) != XIAO_PLATFORM_ESP32) {
@@ -635,8 +705,8 @@ static int run_cli_terminal(xiao_env *env) {
 
     cli_init_layers(st);
     cli_clear_history(st);
-    cli_feed_output(st, "xiao terminal (cli ttf) ready\n", xstrlen("xiao terminal (cli ttf) ready\n"));
-    cli_feed_output(st, "type command (example: ls, cat readme.txt), or 'exit'\n", xstrlen("type command (example: ls, cat readme.txt), or 'exit'\n"));
+    cli_feed_output(st, "BaramOS Terminal ready\n", xstrlen("BaramOS Terminal ready\n"));
+    cli_feed_output(st, "コマンドを入力して実行します。exitで終了します。\n", xstrlen("コマンドを入力して実行します。exitで終了します。\n"));
 
     xiao_console_set_sink(cli_sink, st);
     cli_render_dirty(st);
@@ -655,6 +725,8 @@ static int run_cli_terminal(xiao_env *env) {
             cli_feed_output(st, "\n", 1);
 
             if (st->input_len > 0) {
+                action = terminal_action_for_line(st->input);
+                if (action != TERM_ACTION_NONE) break;
                 if (streq(st->input, "exit")) break;
                 if (xiao_exec_line(st->input) != 0) {
                     cli_feed_output(st, "command failed: ", xstrlen("command failed: "));
@@ -686,15 +758,17 @@ static int run_cli_terminal(xiao_env *env) {
     }
 
     xiao_console_set_sink(0, 0);
+    if (action != TERM_ACTION_NONE) return action;
     cli_feed_output(st, "terminal closed\n", xstrlen("terminal closed\n"));
     st->input_dirty = 1;
     cli_render_dirty(st);
-    return 0;
+    return TERM_ACTION_NONE;
 }
 #endif
 
 int xiao_app_entry(xiao_env *env) {
     int mode = xiao_mode_get();
+    int warned_gui = 0;
 
     if (xiao_argc(env) == 3 && streq(xiao_argv(env, 1), "-m")) {
         int parsed = parse_mode_name(xiao_argv(env, 2));
@@ -709,11 +783,39 @@ int xiao_app_entry(xiao_env *env) {
         return 1;
     }
 
-    if (mode == XIAO_MODE_TEXT) return run_text_terminal(env);
+    while (1) {
+        int rc;
+        if (mode == XIAO_MODE_TEXT) {
+            rc = run_text_terminal(env);
+        } else {
+            if (mode == XIAO_MODE_GUI && !warned_gui) {
+                xiao_console_print(env, "terminal: gui mode is reserved for later, using cli renderer\r\n");
+                warned_gui = 1;
+            }
+            rc = run_cli_terminal(env);
+        }
 
-    if (mode == XIAO_MODE_GUI) {
-        xiao_console_print(env, "terminal: gui mode is reserved for later, using cli renderer\r\n");
+        if (rc == TERM_ACTION_REBOOT) {
+            xiao_fs_chdir("/");
+            if (mode == XIAO_MODE_TEXT) {
+                xiao_console_print(env, "\x1b[2J\x1b[H");
+            } else {
+                xiao_video_fill_rgb888(env, TERM_BG_COLOR);
+            }
+            continue;
+        }
+
+        if (rc == TERM_ACTION_SHUTDOWN) {
+            xiao_fs_chdir("/");
+            if (mode == XIAO_MODE_TEXT) {
+                xiao_console_print(env, "\x1b[2J\x1b[H");
+            } else {
+                xiao_video_fill_rgb888(env, TERM_BG_COLOR);
+            }
+            xiao_console_print(env, "system halted\r\n");
+            while (1) xiao_wait(env, 1000);
+        }
+
+        return rc;
     }
-
-    return run_cli_terminal(env);
 }

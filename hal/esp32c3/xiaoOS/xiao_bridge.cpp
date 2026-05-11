@@ -822,23 +822,30 @@ int xiao_app_clear(xiao_env *env);
 int xiao_app_cp(xiao_env *env);
 int xiao_app_date(xiao_env *env);
 int xiao_app_df(xiao_env *env);
+int xiao_app_echo(xiao_env *env);
 int xiao_app_find(xiao_env *env);
 int xiao_app_free(xiao_env *env);
 int xiao_app_grap(xiao_env *env);
 int xiao_app_grep(xiao_env *env);
+int xiao_app_halt(xiao_env *env);
 int xiao_app_head(xiao_env *env);
 int xiao_app_hello(xiao_env *env);
+int xiao_app_help(xiao_env *env);
 int xiao_app_less(xiao_env *env);
 int xiao_app_ls(xiao_env *env);
 int xiao_app_mkdir(xiao_env *env);
 int xiao_app_mode(xiao_env *env);
 int xiao_app_mv(xiao_env *env);
+int xiao_app_poweroff(xiao_env *env);
 int xiao_app_ps(xiao_env *env);
 int xiao_app_pwd(xiao_env *env);
+int xiao_app_reboot(xiao_env *env);
 int xiao_app_red(xiao_env *env);
 int xiao_app_rm(xiao_env *env);
 int xiao_app_sed(xiao_env *env);
 int xiao_app_serial_hello(xiao_env *env);
+int xiao_app_shutdown(xiao_env *env);
+int xiao_app_sleep(xiao_env *env);
 int xiao_app_sort(xiao_env *env);
 int xiao_app_tail(xiao_env *env);
 int xiao_app_terminal(xiao_env *env);
@@ -847,6 +854,7 @@ int xiao_app_touch(xiao_env *env);
 int xiao_app_uname(xiao_env *env);
 int xiao_app_uniq(xiao_env *env);
 int xiao_app_wc(xiao_env *env);
+int xiao_app_which(xiao_env *env);
 int xiao_app_xrandr(xiao_env *env);
 int xiao_app_xuexi(xiao_env *env);
 
@@ -855,7 +863,7 @@ static const char boot_text[] =
     "exec clear\n"
     "exec hello\n"
     "wait 100\n"
-    "exec terminal\n"
+    "exec mode cli\n"
     "exec nihao\n"
     "exec xuexi\n"
     "wait forever\n"
@@ -9425,23 +9433,30 @@ static const xiao_app app_table[] = {
     { "cp", xiao_app_cp },
     { "date", xiao_app_date },
     { "df", xiao_app_df },
+    { "echo", xiao_app_echo },
     { "find", xiao_app_find },
     { "free", xiao_app_free },
     { "grap", xiao_app_grap },
     { "grep", xiao_app_grep },
+    { "halt", xiao_app_halt },
     { "head", xiao_app_head },
     { "hello", xiao_app_hello },
+    { "help", xiao_app_help },
     { "less", xiao_app_less },
     { "ls", xiao_app_ls },
     { "mkdir", xiao_app_mkdir },
     { "mode", xiao_app_mode },
     { "mv", xiao_app_mv },
+    { "poweroff", xiao_app_poweroff },
     { "ps", xiao_app_ps },
     { "pwd", xiao_app_pwd },
+    { "reboot", xiao_app_reboot },
     { "red", xiao_app_red },
     { "rm", xiao_app_rm },
     { "sed", xiao_app_sed },
     { "serial_hello", xiao_app_serial_hello },
+    { "shutdown", xiao_app_shutdown },
+    { "sleep", xiao_app_sleep },
     { "sort", xiao_app_sort },
     { "tail", xiao_app_tail },
     { "terminal", xiao_app_terminal },
@@ -9450,6 +9465,7 @@ static const xiao_app app_table[] = {
     { "uname", xiao_app_uname },
     { "uniq", xiao_app_uniq },
     { "wc", xiao_app_wc },
+    { "which", xiao_app_which },
     { "xrandr", xiao_app_xrandr },
     { "xuexi", xiao_app_xuexi },
 };
@@ -9624,6 +9640,20 @@ int xiao_app_df(xiao_env *env) {
     xiao_app_df__print_uint(env, info.files);
     xiao_console_print(env, " dirs=");
     xiao_app_df__print_uint(env, info.dirs);
+    xiao_console_print(env, "\r\n");
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/echo.c"
+#include "xiao.h"
+
+int xiao_app_echo(xiao_env *env) {
+    int i;
+    for (i = 1; i < xiao_argc(env); i++) {
+        if (i > 1) xiao_console_print(env, " ");
+        xiao_console_print(env, xiao_argv(env, i));
+    }
     xiao_console_print(env, "\r\n");
     return 0;
 }
@@ -9888,6 +9918,15 @@ int xiao_app_grep(xiao_env *env) {
 }
 
 
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/halt.c"
+#include "xiao.h"
+
+int xiao_app_halt(xiao_env *env) {
+    (void)env;
+    return xiao_exec_app("shutdown");
+}
+
+
 #line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/head.c"
 #include "xiao.h"
 
@@ -10027,6 +10066,23 @@ int xiao_app_head(xiao_env *env) {
 
 int xiao_app_hello(xiao_env *env) {
     xiao_console_print(env, "hello world from xiaoOS app\r\n");
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/help.c"
+#include "xiao.h"
+
+int xiao_app_help(xiao_env *env) {
+    xiao_size i;
+    xiao_console_print(env, "available commands:\r\n");
+    for (i = 0; i < xiao_app_count(); i++) {
+        const char *name = xiao_app_name(i);
+        if (!name) continue;
+        xiao_console_print(env, "  ");
+        xiao_console_print(env, name);
+        xiao_console_print(env, "\r\n");
+    }
     return 0;
 }
 
@@ -10259,6 +10315,15 @@ int xiao_app_mv(xiao_env *env) {
 }
 
 
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/poweroff.c"
+#include "xiao.h"
+
+int xiao_app_poweroff(xiao_env *env) {
+    (void)env;
+    return xiao_exec_app("shutdown");
+}
+
+
 #line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/ps.c"
 #include "xiao.h"
 
@@ -10302,6 +10367,15 @@ int xiao_app_ps(xiao_env *env) {
 int xiao_app_pwd(xiao_env *env) {
     xiao_console_print(env, xiao_fs_cwd());
     xiao_console_print(env, "\r\n");
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/reboot.c"
+#include "xiao.h"
+
+int xiao_app_reboot(xiao_env *env) {
+    xiao_console_print(env, "reboot: run this command from terminal mode\r\n");
     return 0;
 }
 
@@ -10451,6 +10525,54 @@ int xiao_app_sed(xiao_env *env) {
 
 int xiao_app_serial_hello(xiao_env *env) {
     xiao_serial_print(env, "hello world from xiaoOS serial app\r\n");
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/shutdown.c"
+#include "xiao.h"
+
+int xiao_app_shutdown(xiao_env *env) {
+    xiao_console_print(env, "shutdown: run this command from terminal mode\r\n");
+    return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/sleep.c"
+#include "xiao.h"
+
+static unsigned long xiao_app_sleep__parse_uint(const char *s, int *ok) {
+    unsigned long v = 0;
+    int seen = 0;
+    while (s && *s) {
+        if (*s < '0' || *s > '9') {
+            *ok = 0;
+            return 0;
+        }
+        seen = 1;
+        v = v * 10 + (unsigned long)(*s - '0');
+        s++;
+    }
+    *ok = seen;
+    return v;
+}
+
+int xiao_app_sleep(xiao_env *env) {
+    unsigned long sec;
+    int ok = 0;
+
+    if (xiao_argc(env) != 2) {
+        xiao_console_print(env, "usage: sleep SECONDS\r\n");
+        return 1;
+    }
+
+    sec = xiao_app_sleep__parse_uint(xiao_argv(env, 1), &ok);
+    if (!ok) {
+        xiao_console_print(env, "sleep: invalid number\r\n");
+        return 1;
+    }
+
+    xiao_wait(env, (xiao_tick)(sec * 1000ul));
     return 0;
 }
 
@@ -10620,6 +10742,12 @@ int xiao_app_tail(xiao_env *env) {
 #define TERM_CURSOR_COLOR 0xE8EEF6u
 #define TTF_ARENA_SIZE (128 * 1024)
 
+enum {
+    TERM_ACTION_NONE = 0,
+    TERM_ACTION_REBOOT = 2,
+    TERM_ACTION_SHUTDOWN = 3
+};
+
 static int xiao_app_terminal__streq(const char *a, const char *b) {
     while (*a && *b && *a == *b) {
         a++;
@@ -10640,6 +10768,24 @@ static int xiao_app_terminal__parse_mode_name(const char *s) {
     if (xiao_app_terminal__streq(s, "cli")) return XIAO_MODE_CLI;
     if (xiao_app_terminal__streq(s, "gui")) return XIAO_MODE_GUI;
     return -1;
+}
+
+static int xiao_app_terminal__token_streq(const char *line, const char *word) {
+    xiao_size i = 0;
+    if (!line || !word) return 0;
+    while (word[i]) {
+        if (line[i] != word[i]) return 0;
+        i++;
+    }
+    return line[i] == 0 || line[i] == ' ' || line[i] == '\t';
+}
+
+static int xiao_app_terminal__terminal_action_for_line(const char *line) {
+    if (xiao_app_terminal__token_streq(line, "reboot")) return TERM_ACTION_REBOOT;
+    if (xiao_app_terminal__token_streq(line, "shutdown")) return TERM_ACTION_SHUTDOWN;
+    if (xiao_app_terminal__token_streq(line, "poweroff")) return TERM_ACTION_SHUTDOWN;
+    if (xiao_app_terminal__token_streq(line, "halt")) return TERM_ACTION_SHUTDOWN;
+    return TERM_ACTION_NONE;
 }
 
 static int xiao_app_terminal__run_text_terminal(xiao_env *env);
@@ -10785,6 +10931,8 @@ typedef struct {
     int screen_w;
     int screen_h;
     int esc_state;
+    int csi_len;
+    char csi_buf[16];
     int line_count;
     int line_len[TERM_LINE_COUNT];
     char lines[TERM_LINE_COUNT][TERM_LINE_MAX];
@@ -10796,6 +10944,7 @@ typedef struct {
     int input_dirty;
     int cursor_prev_x;
     int input_row_init;
+    int input_row;
     int prev_input_len;
     char prev_input[TERM_INPUT_MAX + 1];
     unsigned char dirty_rows[TERM_LINE_COUNT];
@@ -10808,6 +10957,8 @@ static void xiao_app_terminal__cli_mark_all_output_dirty(cli_term_state *st) {
     for (i = 0; i < TERM_LINE_COUNT; i++) st->dirty_rows[i] = 0;
     for (i = 0; i < st->output_rows; i++) st->dirty_rows[i] = 1;
     st->output_dirty_all = 1;
+    st->input_row_init = 0;
+    st->input_row = -1;
 }
 
 static void xiao_app_terminal__cli_mark_output_row_dirty(cli_term_state *st, int row) {
@@ -10820,9 +10971,15 @@ static void xiao_app_terminal__cli_mark_history_line_dirty(cli_term_state *st, i
     xiao_app_terminal__cli_mark_output_row_dirty(st, row);
 }
 
+static void xiao_app_terminal__cli_mark_input_line_dirty(cli_term_state *st) {
+    int row = st->line_count - st->view_start;
+    xiao_app_terminal__cli_mark_output_row_dirty(st, row);
+}
+
 static int xiao_app_terminal__cli_sync_view(cli_term_state *st) {
     int old = st->view_start;
-    int max_start = st->line_count - st->output_rows;
+    int total_lines = st->line_count + 1;
+    int max_start = total_lines - st->output_rows;
     if (max_start < 0) max_start = 0;
     st->view_start = max_start;
     if (st->view_start != old) {
@@ -10842,7 +10999,7 @@ static void xiao_app_terminal__cli_clear_history(cli_term_state *st) {
         st->lines[i][0] = 0;
     }
     xiao_app_terminal__cli_mark_all_output_dirty(st);
-    st->input_dirty = 1;
+    st->input_dirty = 0;
     st->input_row_init = 0;
 }
 
@@ -10858,6 +11015,7 @@ static void xiao_app_terminal__cli_new_line(cli_term_state *st) {
         if (!view_changed) {
             xiao_app_terminal__cli_mark_history_line_dirty(st, st->line_count - 2);
             xiao_app_terminal__cli_mark_history_line_dirty(st, st->line_count - 1);
+            xiao_app_terminal__cli_mark_input_line_dirty(st);
         }
     } else {
         for (i = 1; i < TERM_LINE_COUNT; i++) {
@@ -10899,24 +11057,51 @@ static void xiao_app_terminal__cli_feed_output(cli_term_state *st, const char *d
 
     for (i = 0; i < len; i++) {
         unsigned char c = (unsigned char)data[i];
-
         if (st->esc_state == 1) {
-            st->esc_state = (c == '[') ? 2 : 0;
-            continue;
-        }
-        if (st->esc_state == 2) {
-            if (c == '2') {
-                st->esc_state = 3;
+            if (c == '[') {
+                st->esc_state = 2;
+                st->csi_len = 0;
+                st->csi_buf[0] = 0;
             } else {
                 st->esc_state = 0;
             }
             continue;
         }
-        if (st->esc_state == 3) {
-            if (c == 'J') {
-                xiao_app_terminal__cli_clear_history(st);
+        if (st->esc_state == 2) {
+            if (c >= 0x40 && c <= 0x7e) {
+                int p0 = 0;
+                int has_digit = 0;
+                int k = 0;
+                st->csi_buf[st->csi_len] = 0;
+                while (st->csi_buf[k] && st->csi_buf[k] != ';') {
+                    if (st->csi_buf[k] >= '0' && st->csi_buf[k] <= '9') {
+                        has_digit = 1;
+                        p0 = p0 * 10 + (st->csi_buf[k] - '0');
+                    } else {
+                        has_digit = 0;
+                        break;
+                    }
+                    k++;
+                }
+                if (c == 'J') {
+                    if (!has_digit || p0 == 2 || p0 == 3) {
+                        xiao_app_terminal__cli_clear_history(st);
+                    }
+                } else if (c == 'H' || c == 'f') {
+                    xiao_app_terminal__cli_mark_all_output_dirty(st);
+                }
+                st->esc_state = 0;
+                st->csi_len = 0;
+                continue;
+            }
+            if ((c >= '0' && c <= '9') || c == ';' || c == '?') {
+                if (st->csi_len + 1 < (int)sizeof(st->csi_buf)) {
+                    st->csi_buf[st->csi_len++] = (char)c;
+                }
+                continue;
             }
             st->esc_state = 0;
+            st->csi_len = 0;
             continue;
         }
 
@@ -11043,86 +11228,89 @@ static int xiao_app_terminal__output_y_for_row(cli_term_state *st, int row) {
     return TERM_MARGIN + row * st->line_height;
 }
 
-static int xiao_app_terminal__input_y(cli_term_state *st) {
-    return TERM_MARGIN + st->output_rows * st->line_height;
-}
-
 static void xiao_app_terminal__render_output_row(cli_term_state *st, int row) {
     int y;
     int h;
-    int hist_idx;
+    int idx;
     y = xiao_app_terminal__output_y_for_row(st, row);
     h = st->line_height;
-    xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
-    hist_idx = st->view_start + row;
-    if (hist_idx >= 0 && hist_idx < st->line_count) {
-        xiao_app_terminal__draw_text(st, TERM_MARGIN, y, st->lines[hist_idx], TERM_TEXT_COLOR);
-    }
-}
-
-static void xiao_app_terminal__render_input_layer(cli_term_state *st) {
-    int y = xiao_app_terminal__input_y(st);
-    int h = st->line_height;
-    int prompt_x = TERM_MARGIN + (int)(st->scale * 10.0f);
-    int old_width = xiao_app_terminal__text_width_n(st, st->prev_input, st->prev_input_len);
-    int new_width = xiao_app_terminal__text_width(st, st->input);
-    int prefix = xiao_app_terminal__common_prefix_len(st->prev_input, st->input);
-    int redraw_from = prefix > 0 ? prefix - 1 : 0;
-    int redraw_x = prompt_x + xiao_app_terminal__text_width_n(st, st->input, redraw_from);
-    int clear_end = prompt_x + (old_width > new_width ? old_width : new_width) + 12;
-    int cursor_x;
-
-    if (!st->input_row_init) {
+    idx = st->view_start + row;
+    if (idx >= 0 && idx < st->line_count) {
         xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
-        xiao_app_terminal__draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
-        xiao_app_terminal__draw_text(st, prompt_x, y, st->input, TERM_INPUT_COLOR);
-        st->input_row_init = 1;
-    } else {
-        if (redraw_x < prompt_x) redraw_x = prompt_x;
-        if (clear_end < redraw_x + 12) clear_end = redraw_x + 12;
-        if (clear_end > st->screen_w) clear_end = st->screen_w;
-        xiao_video_fill_rect_rgb888(st->env, redraw_x, y, clear_end - redraw_x, h, TERM_BG_COLOR);
-        xiao_app_terminal__draw_text_from_index(st, prompt_x, y, st->input, redraw_from, TERM_INPUT_COLOR);
+        xiao_app_terminal__draw_text(st, TERM_MARGIN, y, st->lines[idx], TERM_TEXT_COLOR);
+        return;
     }
+    if (idx == st->line_count) {
+        int prompt_x = TERM_MARGIN + (int)(st->scale * 10.0f);
+        int old_width = xiao_app_terminal__text_width_n(st, st->prev_input, st->prev_input_len);
+        int new_width = xiao_app_terminal__text_width(st, st->input);
+        int prefix = xiao_app_terminal__common_prefix_len(st->prev_input, st->input);
+        int redraw_from = prefix > 0 ? prefix - 1 : 0;
+        int redraw_x = prompt_x + xiao_app_terminal__text_width_n(st, st->input, redraw_from);
+        int clear_end = prompt_x + (old_width > new_width ? old_width : new_width) + 12;
+        int cursor_x;
 
-    cursor_x = prompt_x + new_width;
-    xiao_video_fill_rect_rgb888(st->env, cursor_x, y + h - 4, 10, 2, TERM_CURSOR_COLOR);
-    st->cursor_prev_x = cursor_x;
-    st->prev_input_len = st->input_len;
-    {
-        int i;
-        for (i = 0; i < TERM_INPUT_MAX; i++) {
-            st->prev_input[i] = st->input[i];
-            if (st->input[i] == 0) break;
+        if (st->input_row != row) {
+            st->input_row = row;
+            st->input_row_init = 0;
         }
-        st->prev_input[TERM_INPUT_MAX] = 0;
+
+        if (!st->input_row_init) {
+            xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
+            xiao_app_terminal__draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
+            xiao_app_terminal__draw_text(st, prompt_x, y, st->input, TERM_INPUT_COLOR);
+            st->input_row_init = 1;
+        } else {
+            if (redraw_x < prompt_x) redraw_x = prompt_x;
+            if (clear_end < redraw_x + 12) clear_end = redraw_x + 12;
+            if (clear_end > st->screen_w) clear_end = st->screen_w;
+            xiao_video_fill_rect_rgb888(st->env, redraw_x, y, clear_end - redraw_x, h, TERM_BG_COLOR);
+            xiao_app_terminal__draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
+            xiao_app_terminal__draw_text_from_index(st, prompt_x, y, st->input, redraw_from, TERM_INPUT_COLOR);
+        }
+
+        cursor_x = prompt_x + new_width;
+        xiao_video_fill_rect_rgb888(st->env, cursor_x, y + h - 4, 10, 2, TERM_CURSOR_COLOR);
+        st->cursor_prev_x = cursor_x;
+        st->prev_input_len = st->input_len;
+        {
+            int i;
+            for (i = 0; i < TERM_INPUT_MAX; i++) {
+                st->prev_input[i] = st->input[i];
+                if (st->input[i] == 0) break;
+            }
+            st->prev_input[TERM_INPUT_MAX] = 0;
+        }
+        return;
     }
+    xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
 }
 
 static void xiao_app_terminal__cli_render_dirty(cli_term_state *st) {
     int i;
+    if (st->input_dirty) {
+        xiao_app_terminal__cli_mark_input_line_dirty(st);
+        st->input_dirty = 0;
+    }
     for (i = 0; i < st->output_rows; i++) {
         if (!st->dirty_rows[i]) continue;
         xiao_app_terminal__render_output_row(st, i);
         st->dirty_rows[i] = 0;
     }
     st->output_dirty_all = 0;
-    if (st->input_dirty) {
-        xiao_app_terminal__render_input_layer(st);
-        st->input_dirty = 0;
-    }
 }
 
 static void xiao_app_terminal__cli_init_layers(cli_term_state *st) {
-    st->output_rows = (st->screen_h - TERM_MARGIN * 2 - st->line_height) / st->line_height;
+    st->output_rows = (st->screen_h - TERM_MARGIN * 2) / st->line_height;
     if (st->output_rows < 1) st->output_rows = 1;
     if (st->output_rows > TERM_LINE_COUNT - 1) st->output_rows = TERM_LINE_COUNT - 1;
 
     st->view_start = 0;
     st->cursor_prev_x = -1;
     st->output_dirty_all = 0;
-    st->input_dirty = 1;
+    st->input_dirty = 0;
     st->input_row_init = 0;
+    st->input_row = -1;
     st->prev_input_len = 0;
     st->prev_input[0] = 0;
     xiao_video_fill_rect_rgb888(st->env, 0, 0, st->screen_w, st->screen_h, TERM_BG_COLOR);
@@ -11141,6 +11329,7 @@ static int xiao_app_terminal__cli_sink(void *ctx, const char *data, xiao_size le
 static int xiao_app_terminal__run_text_terminal(xiao_env *env) {
     char line[128];
     xiao_size n = 0;
+    int action = TERM_ACTION_NONE;
 
     xiao_console_print(env, "xiao terminal ready\r\n");
     xiao_console_print(env, "type command (example: ls, cat readme.txt), or 'exit'\r\n");
@@ -11178,6 +11367,8 @@ static int xiao_app_terminal__run_text_terminal(xiao_env *env) {
 
         line[n] = 0;
         if (n == 0) continue;
+        action = xiao_app_terminal__terminal_action_for_line(line);
+        if (action != TERM_ACTION_NONE) return action;
         if (xiao_app_terminal__streq(line, "exit")) break;
 
         if (xiao_exec_line(line) != 0) {
@@ -11188,7 +11379,7 @@ static int xiao_app_terminal__run_text_terminal(xiao_env *env) {
     }
 
     xiao_console_print(env, "terminal closed\r\n");
-    return 0;
+    return TERM_ACTION_NONE;
 }
 
 #ifdef XIAO_TTF_TERMINAL_DISABLED
@@ -11203,6 +11394,7 @@ static int xiao_app_terminal__run_cli_terminal(xiao_env *env) {
     int ascent = 0;
     int descent = 0;
     int line_gap = 0;
+    int action = TERM_ACTION_NONE;
     cli_term_state *st = &cli_state;
 
     if (xiao_platform(env) != XIAO_PLATFORM_ESP32) {
@@ -11241,8 +11433,8 @@ static int xiao_app_terminal__run_cli_terminal(xiao_env *env) {
 
     xiao_app_terminal__cli_init_layers(st);
     xiao_app_terminal__cli_clear_history(st);
-    xiao_app_terminal__cli_feed_output(st, "xiao terminal (cli ttf) ready\n", xiao_app_terminal__xstrlen("xiao terminal (cli ttf) ready\n"));
-    xiao_app_terminal__cli_feed_output(st, "type command (example: ls, cat readme.txt), or 'exit'\n", xiao_app_terminal__xstrlen("type command (example: ls, cat readme.txt), or 'exit'\n"));
+    xiao_app_terminal__cli_feed_output(st, "BaramOS Terminal ready\n", xiao_app_terminal__xstrlen("BaramOS Terminal ready\n"));
+    xiao_app_terminal__cli_feed_output(st, "コマンドを入力して実行します。exitで終了します。\n", xiao_app_terminal__xstrlen("コマンドを入力して実行します。exitで終了します。\n"));
 
     xiao_console_set_sink(xiao_app_terminal__cli_sink, st);
     xiao_app_terminal__cli_render_dirty(st);
@@ -11261,6 +11453,8 @@ static int xiao_app_terminal__run_cli_terminal(xiao_env *env) {
             xiao_app_terminal__cli_feed_output(st, "\n", 1);
 
             if (st->input_len > 0) {
+                action = xiao_app_terminal__terminal_action_for_line(st->input);
+                if (action != TERM_ACTION_NONE) break;
                 if (xiao_app_terminal__streq(st->input, "exit")) break;
                 if (xiao_exec_line(st->input) != 0) {
                     xiao_app_terminal__cli_feed_output(st, "command failed: ", xiao_app_terminal__xstrlen("command failed: "));
@@ -11292,15 +11486,17 @@ static int xiao_app_terminal__run_cli_terminal(xiao_env *env) {
     }
 
     xiao_console_set_sink(0, 0);
+    if (action != TERM_ACTION_NONE) return action;
     xiao_app_terminal__cli_feed_output(st, "terminal closed\n", xiao_app_terminal__xstrlen("terminal closed\n"));
     st->input_dirty = 1;
     xiao_app_terminal__cli_render_dirty(st);
-    return 0;
+    return TERM_ACTION_NONE;
 }
 #endif
 
 int xiao_app_terminal(xiao_env *env) {
     int mode = xiao_mode_get();
+    int warned_gui = 0;
 
     if (xiao_argc(env) == 3 && xiao_app_terminal__streq(xiao_argv(env, 1), "-m")) {
         int parsed = xiao_app_terminal__parse_mode_name(xiao_argv(env, 2));
@@ -11315,13 +11511,41 @@ int xiao_app_terminal(xiao_env *env) {
         return 1;
     }
 
-    if (mode == XIAO_MODE_TEXT) return xiao_app_terminal__run_text_terminal(env);
+    while (1) {
+        int rc;
+        if (mode == XIAO_MODE_TEXT) {
+            rc = xiao_app_terminal__run_text_terminal(env);
+        } else {
+            if (mode == XIAO_MODE_GUI && !warned_gui) {
+                xiao_console_print(env, "terminal: gui mode is reserved for later, using cli renderer\r\n");
+                warned_gui = 1;
+            }
+            rc = xiao_app_terminal__run_cli_terminal(env);
+        }
 
-    if (mode == XIAO_MODE_GUI) {
-        xiao_console_print(env, "terminal: gui mode is reserved for later, using cli renderer\r\n");
+        if (rc == TERM_ACTION_REBOOT) {
+            xiao_fs_chdir("/");
+            if (mode == XIAO_MODE_TEXT) {
+                xiao_console_print(env, "\x1b[2J\x1b[H");
+            } else {
+                xiao_video_fill_rgb888(env, TERM_BG_COLOR);
+            }
+            continue;
+        }
+
+        if (rc == TERM_ACTION_SHUTDOWN) {
+            xiao_fs_chdir("/");
+            if (mode == XIAO_MODE_TEXT) {
+                xiao_console_print(env, "\x1b[2J\x1b[H");
+            } else {
+                xiao_video_fill_rgb888(env, TERM_BG_COLOR);
+            }
+            xiao_console_print(env, "system halted\r\n");
+            while (1) xiao_wait(env, 1000);
+        }
+
+        return rc;
     }
-
-    return xiao_app_terminal__run_cli_terminal(env);
 }
 
 
@@ -11545,6 +11769,48 @@ int xiao_app_wc(xiao_env *env) {
         xiao_app_wc__print_counts(env, total_l, total_w, total_b, "total");
     }
     return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/which.c"
+#include "xiao.h"
+
+static int xiao_app_which__streq(const char *a, const char *b) {
+    while (*a && *b && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == 0 && *b == 0;
+}
+
+static int xiao_app_which__has_app(const char *name) {
+    xiao_size i;
+    for (i = 0; i < xiao_app_count(); i++) {
+        const char *app = xiao_app_name(i);
+        if (app && xiao_app_which__streq(app, name)) return 1;
+    }
+    return 0;
+}
+
+int xiao_app_which(xiao_env *env) {
+    int i;
+    int ok_all = 1;
+
+    if (xiao_argc(env) < 2) {
+        xiao_console_print(env, "usage: which COMMAND...\r\n");
+        return 1;
+    }
+
+    for (i = 1; i < xiao_argc(env); i++) {
+        const char *name = xiao_argv(env, i);
+        if (xiao_app_which__has_app(name)) {
+            xiao_console_print(env, name);
+            xiao_console_print(env, "\r\n");
+        } else {
+            ok_all = 0;
+        }
+    }
+    return ok_all ? 0 : 1;
 }
 
 

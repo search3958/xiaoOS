@@ -5,10 +5,13 @@ extern "C" {
 #include "xiao.h"
 }
 
+static int esp32c3_serial_connected = 0;
+
 static void esp32c3_serial_write(const char *data, xiao_size len) {
     xiao_size i;
+    if (Serial) esp32c3_serial_connected = 1;
+    if (!esp32c3_serial_connected) return;
     for (i = 0; i < len; i++) Serial.write(data[i]);
-    Serial.flush();
 }
 
 static void esp32c3_wait_ms(xiao_tick ms) {
@@ -16,8 +19,14 @@ static void esp32c3_wait_ms(xiao_tick ms) {
 }
 
 static int esp32c3_input_read(void) {
+    if (Serial) esp32c3_serial_connected = 1;
+    if (!esp32c3_serial_connected) return -1;
     if (Serial.available() <= 0) return -1;
     return (int)Serial.read();
+}
+
+extern "C" int xiao_esp32_serial_connected(void) {
+    return esp32c3_serial_connected;
 }
 
 static void esp32c3_yield(void) {
@@ -358,6 +367,7 @@ void setup() {
     while (!Serial && millis() - start < 3000) {
         delay(10);
     }
+    esp32c3_serial_connected = Serial ? 1 : 0;
     xiao_start(&esp32c3_hal, &xiao_image);
 }
 

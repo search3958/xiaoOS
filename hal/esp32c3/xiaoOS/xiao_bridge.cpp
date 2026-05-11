@@ -10729,6 +10729,10 @@ int xiao_app_tail(xiao_env *env) {
 #include "xiao.h"
 #include <stddef.h>
 
+#if defined(ARDUINO) && defined(ESP32)
+extern "C" void esp_restart(void);
+#endif
+
 #define TERM_LINE_COUNT 128
 #define TERM_LINE_MAX 200
 #define TERM_INPUT_MAX 127
@@ -10786,6 +10790,27 @@ static int xiao_app_terminal__terminal_action_for_line(const char *line) {
     if (xiao_app_terminal__token_streq(line, "poweroff")) return TERM_ACTION_SHUTDOWN;
     if (xiao_app_terminal__token_streq(line, "halt")) return TERM_ACTION_SHUTDOWN;
     return TERM_ACTION_NONE;
+}
+
+int xiao_uefi_reboot(void) __attribute__((weak));
+int xiao_uefi_shutdown(void) __attribute__((weak));
+
+static void xiao_app_terminal__do_reboot(xiao_env *env) {
+#if defined(ARDUINO) && defined(ESP32)
+    if (xiao_platform(env) == XIAO_PLATFORM_ESP32) {
+        esp_restart();
+        while (1) xiao_wait(env, 1000);
+    }
+#endif
+    if (xiao_uefi_reboot && xiao_uefi_reboot() == 0) {
+        while (1) xiao_wait(env, 1000);
+    }
+}
+
+static void xiao_app_terminal__do_shutdown(xiao_env *env) {
+    if (xiao_uefi_shutdown && xiao_uefi_shutdown() == 0) {
+        while (1) xiao_wait(env, 1000);
+    }
 }
 
 static int xiao_app_terminal__run_text_terminal(xiao_env *env);
@@ -11524,6 +11549,7 @@ int xiao_app_terminal(xiao_env *env) {
         }
 
         if (rc == TERM_ACTION_REBOOT) {
+            xiao_app_terminal__do_reboot(env);
             xiao_fs_chdir("/");
             if (mode == XIAO_MODE_TEXT) {
                 xiao_console_print(env, "\x1b[2J\x1b[H");
@@ -11534,6 +11560,7 @@ int xiao_app_terminal(xiao_env *env) {
         }
 
         if (rc == TERM_ACTION_SHUTDOWN) {
+            xiao_app_terminal__do_shutdown(env);
             xiao_fs_chdir("/");
             if (mode == XIAO_MODE_TEXT) {
                 xiao_console_print(env, "\x1b[2J\x1b[H");

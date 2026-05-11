@@ -17,6 +17,38 @@ static EFI_GRAPHICS_OUTPUT_PROTOCOL *gop;
 static int gop_mode_ready;
 int _fltused = 0;
 
+typedef enum {
+    XIAO_EFI_RESET_COLD = 0,
+    XIAO_EFI_RESET_WARM = 1,
+    XIAO_EFI_RESET_SHUTDOWN = 2,
+    XIAO_EFI_RESET_PLATFORM_SPECIFIC = 3
+} XIAO_EFI_RESET_TYPE;
+
+typedef void (*XIAO_EFI_RESET_SYSTEM)(
+    XIAO_EFI_RESET_TYPE ResetType,
+    EFI_STATUS ResetStatus,
+    UINTN DataSize,
+    void *ResetData
+);
+
+typedef struct {
+    EFI_TABLE_HEADER Hdr;
+    void *GetTime;
+    void *SetTime;
+    void *GetWakeupTime;
+    void *SetWakeupTime;
+    void *SetVirtualAddressMap;
+    void *ConvertPointer;
+    void *GetVariable;
+    void *GetNextVariableName;
+    void *SetVariable;
+    void *GetNextHighMonotonicCount;
+    XIAO_EFI_RESET_SYSTEM ResetSystem;
+    void *UpdateCapsule;
+    void *QueryCapsuleCapabilities;
+    void *QueryVariableInfo;
+} XIAO_EFI_RUNTIME_SERVICES;
+
 static const EFI_GUID gop_guid = {
     0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}
 };
@@ -334,6 +366,24 @@ static const xiao_hal uefi_hal = {
     uefi_video_set_mode,
     XIAO_PLATFORM_PC,
 };
+
+int xiao_uefi_reboot(void) {
+    XIAO_EFI_RUNTIME_SERVICES *rt;
+    if (!st || !st->RuntimeServices) return -1;
+    rt = (XIAO_EFI_RUNTIME_SERVICES *)st->RuntimeServices;
+    if (!rt->ResetSystem) return -1;
+    rt->ResetSystem(XIAO_EFI_RESET_WARM, EFI_SUCCESS, 0, 0);
+    return 0;
+}
+
+int xiao_uefi_shutdown(void) {
+    XIAO_EFI_RUNTIME_SERVICES *rt;
+    if (!st || !st->RuntimeServices) return -1;
+    rt = (XIAO_EFI_RUNTIME_SERVICES *)st->RuntimeServices;
+    if (!rt->ResetSystem) return -1;
+    rt->ResetSystem(XIAO_EFI_RESET_SHUTDOWN, EFI_SUCCESS, 0, 0);
+    return 0;
+}
 
 EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     (void)image;

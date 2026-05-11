@@ -4,6 +4,9 @@ set -eu
 cd "$(dirname "$0")"
 make arm64
 
+QEMU_ACCEL="${QEMU_ACCEL:-hvf}"
+QEMU_CPU="${QEMU_CPU:-host}"
+
 find_file() {
     for path in "$@"; do
         if [ -n "$path" ] && [ -f "$path" ]; then
@@ -28,8 +31,9 @@ if [ -n "$rpi_efi" ]; then
     echo "Using Raspberry Pi UEFI firmware: $rpi_efi"
     exec qemu-system-aarch64 \
         -M raspi3b \
-        -cpu cortex-a53 \
-        -m 1024 \
+        -accel "$QEMU_ACCEL" \
+        -cpu "$QEMU_CPU" \
+        -m 512M \
         -bios "$rpi_efi" \
         -drive if=none,id=usbdisk,file=fat:rw:build/arm64/esp,format=raw \
         -device usb-storage,drive=usbdisk \
@@ -53,12 +57,13 @@ if [ -z "$aarch64_efi" ]; then
     exit 1
 fi
 
-echo "RPI_EFI.fd not found, using compatible fallback (virt + cortex-a53, 1GB)."
+echo "RPI_EFI.fd not found, using compatible fallback (virt + cortex-a53, 512MB)."
 exec qemu-system-aarch64 \
     -M virt \
-    -cpu cortex-a53 \
+    -accel "$QEMU_ACCEL" \
+    -cpu "$QEMU_CPU" \
     -smp 4 \
-    -m 1024 \
+    -m 512M \
     -device virtio-gpu-pci,xres=1280,yres=720 \
     -device qemu-xhci \
     -device usb-kbd \

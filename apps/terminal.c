@@ -5,7 +5,7 @@
 extern "C" void esp_restart(void);
 #endif
 
-#define TERM_LINE_COUNT 128
+#define TERM_LINE_COUNT 32
 #define TERM_LINE_MAX 200
 #define TERM_INPUT_MAX 127
 #define TERM_GLYPH_BITMAP_MAX (128 * 128)
@@ -17,12 +17,25 @@ extern "C" void esp_restart(void);
 #define TERM_INPUT_COLOR 0xFFCB52u
 #define TERM_CURSOR_COLOR 0xE8EEF6u
 #define TTF_ARENA_SIZE (128 * 1024)
+#define TERM_FP_SHIFT 16
+#define TERM_FP_ONE (1 << TERM_FP_SHIFT)
 
 enum {
     TERM_ACTION_NONE = 0,
     TERM_ACTION_REBOOT = 2,
     TERM_ACTION_SHUTDOWN = 3
 };
+
+enum {
+    TERM_ROW_KIND_NONE = 0,
+    TERM_ROW_KIND_HISTORY = 1,
+    TERM_ROW_KIND_INPUT = 2
+};
+
+typedef struct {
+    unsigned int fg;
+    unsigned int table[256];
+} term_color_lut;
 
 static int streq(const char *a, const char *b) {
     while (*a && *b && *a == *b) {
@@ -223,6 +236,7 @@ typedef struct {
     xiao_env *env;
     stbtt_fontinfo font;
     float scale;
+    int scale_fp;
     int ascent_px;
     int line_height;
     int screen_w;
@@ -231,6 +245,7 @@ typedef struct {
     int csi_len;
     char csi_buf[16];
     int line_count;
+    int line_head;
     int line_len[TERM_LINE_COUNT];
     char lines[TERM_LINE_COUNT][TERM_LINE_MAX];
     char input[TERM_INPUT_MAX + 1];
@@ -244,10 +259,70 @@ typedef struct {
     int input_row;
     int prev_input_len;
     char prev_input[TERM_INPUT_MAX + 1];
+    int row_cache_len[TERM_LINE_COUNT];
+    unsigned char row_cache_kind[TERM_LINE_COUNT];
+    char row_cache_text[TERM_LINE_COUNT][TERM_LINE_MAX];
+    term_color_lut lut_text;
+    term_color_lut lut_prompt;
+    term_color_lut lut_input;
     unsigned char dirty_rows[TERM_LINE_COUNT];
 } cli_term_state;
 
 static cli_term_state cli_state;
+
+static int term_max(int a, int b) {
+    return a > b ? a : b;
+}
+
+static int term_line_slot(cli_term_state *st, int logical_index) {
+    if (logical_index < 0) return 0;
+    return (st->line_head + logical_index) % TERM_LINE_COUNT;
+}
+
+static void term_copy_cstr_cap(char *dst, int cap, const char *src, int *out_len) {
+    int i = 0;
+    if (cap <= 0) return;
+    while (src && src[i] && i + 1 < cap) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+    if (out_len) *out_len = i;
+}
+
+static int term_cstr_eq_n(const char *a, int a_len, const char *b, int b_len) {
+    int i;
+    if (a_len != b_len) return 0;
+    for (i = 0; i < a_len; i++) {
+        if (a[i] != b[i]) return 0;
+    }
+    return 1;
+}
+
+static void term_init_color_lut(term_color_lut *lut, unsigned int fg) {
+    int a;
+    unsigned int bg_r = (TERM_BG_COLOR >> 16) & 0xffu;
+    unsigned int bg_g = (TERM_BG_COLOR >> 8) & 0xffu;
+    unsigned int bg_b = TERM_BG_COLOR & 0xffu;
+    unsigned int fg_r = (fg >> 16) & 0xffu;
+    unsigned int fg_g = (fg >> 8) & 0xffu;
+    unsigned int fg_b = fg & 0xffu;
+    lut->fg = fg;
+    for (a = 0; a < 256; a++) {
+        unsigned int ia = (unsigned int)(255 - a);
+        unsigned int r = (fg_r * (unsigned int)a + bg_r * ia) / 255u;
+        unsigned int g = (fg_g * (unsigned int)a + bg_g * ia) / 255u;
+        unsigned int b = (fg_b * (unsigned int)a + bg_b * ia) / 255u;
+        lut->table[a] = (r << 16) | (g << 8) | b;
+    }
+}
+
+static const term_color_lut *term_pick_lut(cli_term_state *st, unsigned int color) {
+    if (color == st->lut_text.fg) return &st->lut_text;
+    if (color == st->lut_prompt.fg) return &st->lut_prompt;
+    if (color == st->lut_input.fg) return &st->lut_input;
+    return 0;
+}
 
 static void cli_mark_all_output_dirty(cli_term_state *st) {
     int i;
@@ -256,6 +331,7 @@ static void cli_mark_all_output_dirty(cli_term_state *st) {
     st->output_dirty_all = 1;
     st->input_row_init = 0;
     st->input_row = -1;
+    for (i = 0; i < TERM_LINE_COUNT; i++) st->row_cache_kind[i] = TERM_ROW_KIND_NONE;
 }
 
 static void cli_mark_output_row_dirty(cli_term_state *st, int row) {
@@ -289,6 +365,7 @@ static int cli_sync_view(cli_term_state *st) {
 static void cli_clear_history(cli_term_state *st) {
     int i;
     st->line_count = 1;
+    st->line_head = 0;
     st->esc_state = 0;
     st->view_start = 0;
     for (i = 0; i < TERM_LINE_COUNT; i++) {
@@ -301,12 +378,12 @@ static void cli_clear_history(cli_term_state *st) {
 }
 
 static void cli_new_line(cli_term_state *st) {
-    int i;
     int view_changed = 0;
 
     if (st->line_count < TERM_LINE_COUNT) {
-        st->line_len[st->line_count] = 0;
-        st->lines[st->line_count][0] = 0;
+        int slot = term_line_slot(st, st->line_count);
+        st->line_len[slot] = 0;
+        st->lines[slot][0] = 0;
         st->line_count++;
         view_changed = cli_sync_view(st);
         if (!view_changed) {
@@ -315,23 +392,20 @@ static void cli_new_line(cli_term_state *st) {
             cli_mark_input_line_dirty(st);
         }
     } else {
-        for (i = 1; i < TERM_LINE_COUNT; i++) {
-            int j;
-            st->line_len[i - 1] = st->line_len[i];
-            for (j = 0; j < TERM_LINE_MAX; j++) {
-                st->lines[i - 1][j] = st->lines[i][j];
-                if (st->lines[i][j] == 0) break;
-            }
+        st->line_head = (st->line_head + 1) % TERM_LINE_COUNT;
+        {
+            int slot = term_line_slot(st, st->line_count - 1);
+            st->line_len[slot] = 0;
+            st->lines[slot][0] = 0;
         }
-        st->line_len[TERM_LINE_COUNT - 1] = 0;
-        st->lines[TERM_LINE_COUNT - 1][0] = 0;
         cli_sync_view(st);
         cli_mark_all_output_dirty(st);
     }
 }
 
 static void cli_push_char(cli_term_state *st, char c) {
-    int idx = st->line_count - 1;
+    int logical_idx = st->line_count - 1;
+    int idx = term_line_slot(st, logical_idx);
     int len = st->line_len[idx];
     if (c == '\t') {
         int k;
@@ -340,13 +414,14 @@ static void cli_push_char(cli_term_state *st, char c) {
     }
     if (len + 1 >= TERM_LINE_MAX) {
         cli_new_line(st);
-        idx = st->line_count - 1;
+        logical_idx = st->line_count - 1;
+        idx = term_line_slot(st, logical_idx);
         len = st->line_len[idx];
     }
     st->lines[idx][len] = c;
     st->lines[idx][len + 1] = 0;
     st->line_len[idx] = len + 1;
-    cli_mark_history_line_dirty(st, idx);
+    cli_mark_history_line_dirty(st, logical_idx);
 }
 
 static void cli_feed_output(cli_term_state *st, const char *data, xiao_size len) {
@@ -411,11 +486,14 @@ static void cli_feed_output(cli_term_state *st, const char *data, xiao_size len)
             cli_new_line(st);
             continue;
         }
-        if ((c == 0x08 || c == 0x7f) && st->line_len[st->line_count - 1] > 0) {
-            int idx = st->line_count - 1;
-            st->line_len[idx]--;
-            st->lines[idx][st->line_len[idx]] = 0;
-            cli_mark_history_line_dirty(st, idx);
+        if (c == 0x08 || c == 0x7f) {
+            int logical_idx = st->line_count - 1;
+            int idx = term_line_slot(st, logical_idx);
+            if (st->line_len[idx] > 0) {
+                st->line_len[idx]--;
+                st->lines[idx][st->line_len[idx]] = 0;
+                cli_mark_history_line_dirty(st, logical_idx);
+            }
             continue;
         }
         if (c >= 32 && c <= 126) {
@@ -424,19 +502,26 @@ static void cli_feed_output(cli_term_state *st, const char *data, xiao_size len)
     }
 }
 
-static unsigned int blend_color(unsigned int rgb, unsigned char alpha) {
-    unsigned int r = ((rgb >> 16) & 0xffu) * (unsigned int)alpha / 255u;
-    unsigned int g = ((rgb >> 8) & 0xffu) * (unsigned int)alpha / 255u;
-    unsigned int b = (rgb & 0xffu) * (unsigned int)alpha / 255u;
-    return (r << 16) | (g << 8) | b;
+static int term_advance_px(cli_term_state *st, int cp, int next_cp) {
+    int adv = 0;
+    int lsb = 0;
+    int px_fp;
+    stbtt_GetCodepointHMetrics(&st->font, cp, &adv, &lsb);
+    (void)lsb;
+    px_fp = adv * st->scale_fp;
+    if (next_cp > 0) {
+        px_fp += stbtt_GetCodepointKernAdvance(&st->font, cp, next_cp) * st->scale_fp;
+    }
+    if (px_fp >= 0) return (px_fp + (TERM_FP_ONE >> 1)) >> TERM_FP_SHIFT;
+    return -(((-px_fp) + (TERM_FP_ONE >> 1)) >> TERM_FP_SHIFT);
 }
 
 static int draw_glyph(cli_term_state *st, int pen_x, int baseline_y, int cp, int next_cp, unsigned int color) {
     static unsigned char bitmap[TERM_GLYPH_BITMAP_MAX];
+    const term_color_lut *lut = term_pick_lut(st, color);
     int x0, y0, x1, y1;
     int w, h;
     int gx, gy;
-    int advance, lsb;
 
     if (cp < 32 || cp > 126) cp = '?';
 
@@ -450,21 +535,45 @@ static int draw_glyph(cli_term_state *st, int pen_x, int baseline_y, int cp, int
         for (gy = 0; gy < h; gy++) {
             int py = baseline_y + y0 + gy;
             if (py < 0 || py >= st->screen_h) continue;
-            for (gx = 0; gx < w; gx++) {
+            gx = 0;
+            while (gx < w) {
                 unsigned char a = bitmap[gy * w + gx];
                 int px = pen_x + x0 + gx;
-                if (a == 0 || px < 0 || px >= st->screen_w) continue;
-                xiao_video_draw_pixel_rgb888(st->env, px, py, blend_color(color, a));
+                if (a == 0 || px >= st->screen_w) {
+                    gx++;
+                    continue;
+                }
+                if (px < 0) {
+                    gx++;
+                    continue;
+                }
+                if (a == 255) {
+                    int run = gx + 1;
+                    while (run < w && bitmap[gy * w + run] == 255) run++;
+                    {
+                        int run_px = pen_x + x0 + gx;
+                        int run_w = run - gx;
+                        if (run_px < 0) {
+                            run_w += run_px;
+                            run_px = 0;
+                        }
+                        if (run_px + run_w > st->screen_w) run_w = st->screen_w - run_px;
+                        if (run_w > 0) xiao_video_fill_rect_rgb888(st->env, run_px, py, run_w, 1, color);
+                    }
+                    gx = run;
+                    continue;
+                }
+                if (lut) {
+                    xiao_video_draw_pixel_rgb888(st->env, px, py, lut->table[a]);
+                } else {
+                    xiao_video_draw_pixel_rgb888(st->env, px, py, color);
+                }
+                gx++;
             }
         }
     }
 
-    stbtt_GetCodepointHMetrics(&st->font, cp, &advance, &lsb);
-    (void)lsb;
-    pen_x += (int)((float)advance * st->scale + 0.5f);
-    if (next_cp > 0) {
-        pen_x += (int)((float)stbtt_GetCodepointKernAdvance(&st->font, cp, next_cp) * st->scale + 0.5f);
-    }
+    pen_x += term_advance_px(st, cp, next_cp);
     return pen_x;
 }
 
@@ -474,12 +583,7 @@ static int text_width_n(cli_term_state *st, const char *text, int n) {
     while (text[i] && (n < 0 || i < n)) {
         int cp = (unsigned char)text[i];
         int next_cp = text[i + 1] ? (unsigned char)text[i + 1] : 0;
-        int adv = 0;
-        int lsb = 0;
-        stbtt_GetCodepointHMetrics(&st->font, cp, &adv, &lsb);
-        (void)lsb;
-        width += (int)((float)adv * st->scale + 0.5f);
-        if (next_cp > 0) width += (int)((float)stbtt_GetCodepointKernAdvance(&st->font, cp, next_cp) * st->scale + 0.5f);
+        width += term_advance_px(st, cp, next_cp);
         i++;
     }
     return width;
@@ -498,22 +602,27 @@ static int common_prefix_len(const char *a, const char *b) {
 static void draw_text_from_index(cli_term_state *st, int x, int y, const char *text, int start, unsigned int color) {
     int pen_x = x;
     int baseline = y + st->ascent_px;
-    int i = 0;
-    while (text[i]) {
-        int cp = (unsigned char)text[i];
-        int next_cp = text[i + 1] ? (unsigned char)text[i + 1] : 0;
+    int text_len = 0;
+    int i;
+    int cpv[TERM_LINE_MAX];
+    int adv[TERM_LINE_MAX];
+
+    while (text[text_len] && text_len < TERM_LINE_MAX - 1) {
+        cpv[text_len] = (unsigned char)text[text_len];
+        text_len++;
+    }
+    for (i = 0; i < text_len; i++) {
+        int next_cp = (i + 1 < text_len) ? cpv[i + 1] : 0;
+        adv[i] = term_advance_px(st, cpv[i], next_cp);
+    }
+    for (i = 0; i < text_len; i++) {
+        int next_cp = (i + 1 < text_len) ? cpv[i + 1] : 0;
         if (i >= start) {
-            pen_x = draw_glyph(st, pen_x, baseline, cp, next_cp, color);
+            pen_x = draw_glyph(st, pen_x, baseline, cpv[i], next_cp, color);
         } else {
-            int adv = 0;
-            int lsb = 0;
-            stbtt_GetCodepointHMetrics(&st->font, cp, &adv, &lsb);
-            (void)lsb;
-            pen_x += (int)((float)adv * st->scale + 0.5f);
-            if (next_cp > 0) pen_x += (int)((float)stbtt_GetCodepointKernAdvance(&st->font, cp, next_cp) * st->scale + 0.5f);
+            pen_x += adv[i];
         }
         if (pen_x >= st->screen_w - TERM_MARGIN) break;
-        i++;
     }
 }
 
@@ -533,15 +642,43 @@ static void render_output_row(cli_term_state *st, int row) {
     h = st->line_height;
     idx = st->view_start + row;
     if (idx >= 0 && idx < st->line_count) {
-        xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
-        draw_text(st, TERM_MARGIN, y, st->lines[idx], TERM_TEXT_COLOR);
+        int slot = term_line_slot(st, idx);
+        int new_len = st->line_len[slot];
+        int old_len = st->row_cache_len[row];
+        int redraw_from = 0;
+        int redraw_x;
+        int old_width;
+        int new_width;
+        int clear_end;
+
+        if (st->row_cache_kind[row] == TERM_ROW_KIND_HISTORY &&
+            term_cstr_eq_n(st->row_cache_text[row], old_len, st->lines[slot], new_len)) {
+            return;
+        }
+        if (st->row_cache_kind[row] == TERM_ROW_KIND_HISTORY) {
+            int prefix = common_prefix_len(st->row_cache_text[row], st->lines[slot]);
+            redraw_from = prefix > 0 ? prefix - 1 : 0;
+        }
+        redraw_x = TERM_MARGIN + text_width_n(st, st->lines[slot], redraw_from);
+        old_width = text_width_n(st, st->row_cache_text[row], old_len);
+        new_width = text_width_n(st, st->lines[slot], new_len);
+        clear_end = TERM_MARGIN + term_max(old_width, new_width) + 12;
+        if (st->row_cache_kind[row] != TERM_ROW_KIND_HISTORY || redraw_x < TERM_MARGIN) {
+            redraw_x = 0;
+        }
+        if (clear_end < redraw_x + 12) clear_end = redraw_x + 12;
+        if (clear_end > st->screen_w) clear_end = st->screen_w;
+        xiao_video_fill_rect_rgb888(st->env, redraw_x, y, clear_end - redraw_x, h, TERM_BG_COLOR);
+        draw_text_from_index(st, TERM_MARGIN, y, st->lines[slot], redraw_from, TERM_TEXT_COLOR);
+        st->row_cache_kind[row] = TERM_ROW_KIND_HISTORY;
+        term_copy_cstr_cap(st->row_cache_text[row], TERM_LINE_MAX, st->lines[slot], &st->row_cache_len[row]);
         return;
     }
     if (idx == st->line_count) {
-        int prompt_x = TERM_MARGIN + (int)(st->scale * 10.0f);
-        int old_width = text_width_n(st, st->prev_input, st->prev_input_len);
+        int prompt_x = TERM_MARGIN + text_width_n(st, ">", -1);
+        int old_width = text_width_n(st, st->row_cache_text[row], st->row_cache_len[row]);
         int new_width = text_width(st, st->input);
-        int prefix = common_prefix_len(st->prev_input, st->input);
+        int prefix = st->row_cache_kind[row] == TERM_ROW_KIND_INPUT ? common_prefix_len(st->row_cache_text[row], st->input) : 0;
         int redraw_from = prefix > 0 ? prefix - 1 : 0;
         int redraw_x = prompt_x + text_width_n(st, st->input, redraw_from);
         int clear_end = prompt_x + (old_width > new_width ? old_width : new_width) + 12;
@@ -552,7 +689,7 @@ static void render_output_row(cli_term_state *st, int row) {
             st->input_row_init = 0;
         }
 
-        if (!st->input_row_init) {
+        if (!st->input_row_init || st->row_cache_kind[row] != TERM_ROW_KIND_INPUT) {
             xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
             draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
             draw_text(st, prompt_x, y, st->input, TERM_INPUT_COLOR);
@@ -570,17 +707,17 @@ static void render_output_row(cli_term_state *st, int row) {
         xiao_video_fill_rect_rgb888(st->env, cursor_x, y + h - 4, 10, 2, TERM_CURSOR_COLOR);
         st->cursor_prev_x = cursor_x;
         st->prev_input_len = st->input_len;
-        {
-            int i;
-            for (i = 0; i < TERM_INPUT_MAX; i++) {
-                st->prev_input[i] = st->input[i];
-                if (st->input[i] == 0) break;
-            }
-            st->prev_input[TERM_INPUT_MAX] = 0;
-        }
+        term_copy_cstr_cap(st->prev_input, TERM_INPUT_MAX + 1, st->input, 0);
+        st->row_cache_kind[row] = TERM_ROW_KIND_INPUT;
+        term_copy_cstr_cap(st->row_cache_text[row], TERM_LINE_MAX, st->input, &st->row_cache_len[row]);
         return;
     }
-    xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
+    if (st->row_cache_kind[row] != TERM_ROW_KIND_NONE) {
+        xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
+        st->row_cache_kind[row] = TERM_ROW_KIND_NONE;
+        st->row_cache_len[row] = 0;
+        st->row_cache_text[row][0] = 0;
+    }
 }
 
 static void cli_render_dirty(cli_term_state *st) {
@@ -598,6 +735,7 @@ static void cli_render_dirty(cli_term_state *st) {
 }
 
 static void cli_init_layers(cli_term_state *st) {
+    int i;
     st->output_rows = (st->screen_h - TERM_MARGIN * 2) / st->line_height;
     if (st->output_rows < 1) st->output_rows = 1;
     if (st->output_rows > TERM_LINE_COUNT - 1) st->output_rows = TERM_LINE_COUNT - 1;
@@ -610,6 +748,14 @@ static void cli_init_layers(cli_term_state *st) {
     st->input_row = -1;
     st->prev_input_len = 0;
     st->prev_input[0] = 0;
+    for (i = 0; i < TERM_LINE_COUNT; i++) {
+        st->row_cache_kind[i] = TERM_ROW_KIND_NONE;
+        st->row_cache_len[i] = 0;
+        st->row_cache_text[i][0] = 0;
+    }
+    term_init_color_lut(&st->lut_text, TERM_TEXT_COLOR);
+    term_init_color_lut(&st->lut_prompt, TERM_PROMPT_COLOR);
+    term_init_color_lut(&st->lut_input, TERM_INPUT_COLOR);
     xiao_video_fill_rect_rgb888(st->env, 0, 0, st->screen_w, st->screen_h, TERM_BG_COLOR);
     cli_mark_all_output_dirty(st);
 }
@@ -723,6 +869,7 @@ static int run_cli_terminal(xiao_env *env) {
     }
 
     st->scale = stbtt_ScaleForPixelHeight(&st->font, TERM_FONT_PIXELS);
+    st->scale_fp = (int)(st->scale * (float)TERM_FP_ONE + 0.5f);
     stbtt_GetFontVMetrics(&st->font, &ascent, &descent, &line_gap);
     st->ascent_px = (int)((float)ascent * st->scale + 0.5f);
     st->line_height = (int)(((float)(ascent - descent + line_gap)) * st->scale + 0.5f);

@@ -4,6 +4,9 @@ set -eu
 cd "$(dirname "$0")"
 make arm64
 
+QEMU_ACCEL="${QEMU_ACCEL:-hvf}"
+QEMU_CPU="${QEMU_CPU:-host}"
+
 find_firmware() {
     name="$1"
     for path in \
@@ -27,7 +30,8 @@ code="$(find_firmware edk2-aarch64-code.fd)"
 
 exec qemu-system-aarch64 \
     -M virt \
-    -cpu cortex-a72 \
+    -accel "$QEMU_ACCEL" \
+    -cpu "$QEMU_CPU" \
     -m 512M \
     -device virtio-gpu-pci,xres=1280,yres=720 \
     -device qemu-xhci \

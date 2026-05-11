@@ -27,6 +27,7 @@ code="$(find_firmware edk2-x86_64-code.fd)"
 
 exec qemu-system-x86_64 \
     -machine q35 \
+    -m 512M \
     -drive if=pflash,format=raw,readonly=on,file="$code" \
     -drive if=ide,file=fat:rw:build/uefi/esp,format=raw \
     -serial vc \

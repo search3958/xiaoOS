@@ -870,6 +870,17 @@ static const char boot_text[] =
     ;
 
 static const char file_0[] = {
+    35, 32, 66, 73, 79, 83, 32, 105, 109, 97, 103, 101, 32, 115, 105, 122, 101, 32, 
+    105, 115, 32, 108, 105, 109, 105, 116, 101, 100, 32, 116, 111, 32, 54, 52, 32, 75, 
+    105, 66, 32, 115, 116, 97, 103, 101, 50, 32, 112, 97, 121, 108, 111, 97, 100, 46, 
+    10, 35, 32, 69, 120, 99, 108, 117, 100, 101, 32, 108, 97, 114, 103, 101, 32, 97, 
+    115, 115, 101, 116, 115, 32, 111, 110, 108, 121, 32, 110, 101, 101, 100, 101, 100, 32, 
+    102, 111, 114, 32, 67, 76, 73, 32, 84, 84, 70, 32, 114, 101, 110, 100, 101, 114, 
+    101, 114, 46, 10, 73, 66, 77, 80, 108, 101, 120, 77, 111, 110, 111, 45, 82, 101, 
+    103, 117, 108, 97, 114, 46, 116, 116, 102, 10, 0
+};
+
+static const char file_1[] = {
     0, 1, 0, 0, 0, 18, 1, 0, 0, 4, 0, 32, 71, 68, 69, 70, 50, 130, 
     50, 119, 0, 0, 2, 148, 0, 0, 0, 178, 71, 80, 79, 83, 39, 179, 63, 211, 
     0, 0, 6, 112, 0, 0, 4, 238, 71, 83, 85, 66, 160, 2, 173, 241, 0, 0, 
@@ -8306,7 +8317,7 @@ static const char file_0[] = {
     0, 0, 0
 };
 
-static const char file_1[] = {
+static const char file_2[] = {
     71, 67, 57, 65, 48, 49, 32, 105, 110, 105, 116, 105, 97, 108, 105, 122, 97, 116, 
     105, 111, 110, 32, 99, 111, 109, 109, 97, 110, 100, 32, 115, 101, 113, 117, 101, 110, 
     99, 101, 32, 105, 110, 32, 104, 97, 108, 47, 101, 115, 112, 51, 50, 99, 51, 47, 
@@ -8331,7 +8342,7 @@ static const char file_1[] = {
     98, 95, 116, 114, 117, 101, 116, 121, 112, 101, 46, 104, 10, 0
 };
 
-static const char file_2[] = {
+static const char file_3[] = {
     65, 116, 116, 114, 105, 98, 117, 116, 105, 111, 110, 45, 78, 111, 110, 67, 111, 109, 
     109, 101, 114, 99, 105, 97, 108, 32, 52, 46, 48, 32, 73, 110, 116, 101, 114, 110, 
     97, 116, 105, 111, 110, 97, 108, 10, 10, 61, 61, 61, 61, 61, 61, 61, 61, 61, 
@@ -9409,13 +9420,13 @@ static const char file_2[] = {
     101, 99, 111, 109, 109, 111, 110, 115, 46, 111, 114, 103, 46, 10, 0
 };
 
-static const char file_3[] = {
+static const char file_4[] = {
     104, 101, 108, 108, 111, 32, 102, 114, 111, 109, 32, 120, 105, 97, 111, 70, 83, 10, 
     104, 101, 108, 108, 111, 32, 102, 114, 111, 109, 32, 97, 110, 32, 97, 112, 112, 45, 
     114, 101, 97, 100, 97, 98, 108, 101, 32, 102, 105, 108, 101, 10, 0
 };
 
-static const char file_4[] = {
+static const char file_5[] = {
     120, 105, 97, 111, 79, 83, 32, 101, 109, 98, 101, 100, 100, 101, 100, 32, 102, 105, 
     108, 101, 32, 115, 121, 115, 116, 101, 109, 10, 10, 84, 104, 105, 115, 32, 116, 101, 
     120, 116, 32, 105, 115, 32, 99, 111, 109, 112, 105, 108, 101, 100, 32, 105, 110, 116, 
@@ -9471,11 +9482,12 @@ static const xiao_app app_table[] = {
 };
 
 static const xiao_file file_table[] = {
-    { "IBMPlexMono-Regular.ttf", file_0, 133796 },
-    { "credit.txt", file_1, 391 },
-    { "licence.txt", file_2, 19346 },
-    { "test/hello.txt", file_3, 50 },
-    { "test/readme.txt", file_4, 142 },
+    { ".xiaoignore-bios", file_0, 136 },
+    { "IBMPlexMono-Regular.ttf", file_1, 133796 },
+    { "credit.txt", file_2, 391 },
+    { "licence.txt", file_3, 19346 },
+    { "test/hello.txt", file_4, 50 },
+    { "test/readme.txt", file_5, 142 },
 };
 
 const xiao_boot_image xiao_image = {
@@ -10733,7 +10745,7 @@ int xiao_app_tail(xiao_env *env) {
 extern "C" void esp_restart(void);
 #endif
 
-#define TERM_LINE_COUNT 128
+#define TERM_LINE_COUNT 32
 #define TERM_LINE_MAX 200
 #define TERM_INPUT_MAX 127
 #define TERM_GLYPH_BITMAP_MAX (128 * 128)
@@ -10745,12 +10757,25 @@ extern "C" void esp_restart(void);
 #define TERM_INPUT_COLOR 0xFFCB52u
 #define TERM_CURSOR_COLOR 0xE8EEF6u
 #define TTF_ARENA_SIZE (128 * 1024)
+#define TERM_FP_SHIFT 16
+#define TERM_FP_ONE (1 << TERM_FP_SHIFT)
 
 enum {
     TERM_ACTION_NONE = 0,
     TERM_ACTION_REBOOT = 2,
     TERM_ACTION_SHUTDOWN = 3
 };
+
+enum {
+    TERM_ROW_KIND_NONE = 0,
+    TERM_ROW_KIND_HISTORY = 1,
+    TERM_ROW_KIND_INPUT = 2
+};
+
+typedef struct {
+    unsigned int fg;
+    unsigned int table[256];
+} term_color_lut;
 
 static int xiao_app_terminal__streq(const char *a, const char *b) {
     while (*a && *b && *a == *b) {
@@ -10951,6 +10976,7 @@ typedef struct {
     xiao_env *env;
     stbtt_fontinfo font;
     float scale;
+    int scale_fp;
     int ascent_px;
     int line_height;
     int screen_w;
@@ -10959,6 +10985,7 @@ typedef struct {
     int csi_len;
     char csi_buf[16];
     int line_count;
+    int line_head;
     int line_len[TERM_LINE_COUNT];
     char lines[TERM_LINE_COUNT][TERM_LINE_MAX];
     char input[TERM_INPUT_MAX + 1];
@@ -10972,10 +10999,70 @@ typedef struct {
     int input_row;
     int prev_input_len;
     char prev_input[TERM_INPUT_MAX + 1];
+    int row_cache_len[TERM_LINE_COUNT];
+    unsigned char row_cache_kind[TERM_LINE_COUNT];
+    char row_cache_text[TERM_LINE_COUNT][TERM_LINE_MAX];
+    term_color_lut lut_text;
+    term_color_lut lut_prompt;
+    term_color_lut lut_input;
     unsigned char dirty_rows[TERM_LINE_COUNT];
 } cli_term_state;
 
 static cli_term_state cli_state;
+
+static int xiao_app_terminal__term_max(int a, int b) {
+    return a > b ? a : b;
+}
+
+static int xiao_app_terminal__term_line_slot(cli_term_state *st, int logical_index) {
+    if (logical_index < 0) return 0;
+    return (st->line_head + logical_index) % TERM_LINE_COUNT;
+}
+
+static void xiao_app_terminal__term_copy_cstr_cap(char *dst, int cap, const char *src, int *out_len) {
+    int i = 0;
+    if (cap <= 0) return;
+    while (src && src[i] && i + 1 < cap) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+    if (out_len) *out_len = i;
+}
+
+static int xiao_app_terminal__term_cstr_eq_n(const char *a, int a_len, const char *b, int b_len) {
+    int i;
+    if (a_len != b_len) return 0;
+    for (i = 0; i < a_len; i++) {
+        if (a[i] != b[i]) return 0;
+    }
+    return 1;
+}
+
+static void xiao_app_terminal__term_init_color_lut(term_color_lut *lut, unsigned int fg) {
+    int a;
+    unsigned int bg_r = (TERM_BG_COLOR >> 16) & 0xffu;
+    unsigned int bg_g = (TERM_BG_COLOR >> 8) & 0xffu;
+    unsigned int bg_b = TERM_BG_COLOR & 0xffu;
+    unsigned int fg_r = (fg >> 16) & 0xffu;
+    unsigned int fg_g = (fg >> 8) & 0xffu;
+    unsigned int fg_b = fg & 0xffu;
+    lut->fg = fg;
+    for (a = 0; a < 256; a++) {
+        unsigned int ia = (unsigned int)(255 - a);
+        unsigned int r = (fg_r * (unsigned int)a + bg_r * ia) / 255u;
+        unsigned int g = (fg_g * (unsigned int)a + bg_g * ia) / 255u;
+        unsigned int b = (fg_b * (unsigned int)a + bg_b * ia) / 255u;
+        lut->table[a] = (r << 16) | (g << 8) | b;
+    }
+}
+
+static const term_color_lut *term_pick_lut(cli_term_state *st, unsigned int color) {
+    if (color == st->lut_text.fg) return &st->lut_text;
+    if (color == st->lut_prompt.fg) return &st->lut_prompt;
+    if (color == st->lut_input.fg) return &st->lut_input;
+    return 0;
+}
 
 static void xiao_app_terminal__cli_mark_all_output_dirty(cli_term_state *st) {
     int i;
@@ -10984,6 +11071,7 @@ static void xiao_app_terminal__cli_mark_all_output_dirty(cli_term_state *st) {
     st->output_dirty_all = 1;
     st->input_row_init = 0;
     st->input_row = -1;
+    for (i = 0; i < TERM_LINE_COUNT; i++) st->row_cache_kind[i] = TERM_ROW_KIND_NONE;
 }
 
 static void xiao_app_terminal__cli_mark_output_row_dirty(cli_term_state *st, int row) {
@@ -11017,6 +11105,7 @@ static int xiao_app_terminal__cli_sync_view(cli_term_state *st) {
 static void xiao_app_terminal__cli_clear_history(cli_term_state *st) {
     int i;
     st->line_count = 1;
+    st->line_head = 0;
     st->esc_state = 0;
     st->view_start = 0;
     for (i = 0; i < TERM_LINE_COUNT; i++) {
@@ -11029,12 +11118,12 @@ static void xiao_app_terminal__cli_clear_history(cli_term_state *st) {
 }
 
 static void xiao_app_terminal__cli_new_line(cli_term_state *st) {
-    int i;
     int view_changed = 0;
 
     if (st->line_count < TERM_LINE_COUNT) {
-        st->line_len[st->line_count] = 0;
-        st->lines[st->line_count][0] = 0;
+        int slot = xiao_app_terminal__term_line_slot(st, st->line_count);
+        st->line_len[slot] = 0;
+        st->lines[slot][0] = 0;
         st->line_count++;
         view_changed = xiao_app_terminal__cli_sync_view(st);
         if (!view_changed) {
@@ -11043,23 +11132,20 @@ static void xiao_app_terminal__cli_new_line(cli_term_state *st) {
             xiao_app_terminal__cli_mark_input_line_dirty(st);
         }
     } else {
-        for (i = 1; i < TERM_LINE_COUNT; i++) {
-            int j;
-            st->line_len[i - 1] = st->line_len[i];
-            for (j = 0; j < TERM_LINE_MAX; j++) {
-                st->lines[i - 1][j] = st->lines[i][j];
-                if (st->lines[i][j] == 0) break;
-            }
+        st->line_head = (st->line_head + 1) % TERM_LINE_COUNT;
+        {
+            int slot = xiao_app_terminal__term_line_slot(st, st->line_count - 1);
+            st->line_len[slot] = 0;
+            st->lines[slot][0] = 0;
         }
-        st->line_len[TERM_LINE_COUNT - 1] = 0;
-        st->lines[TERM_LINE_COUNT - 1][0] = 0;
         xiao_app_terminal__cli_sync_view(st);
         xiao_app_terminal__cli_mark_all_output_dirty(st);
     }
 }
 
 static void xiao_app_terminal__cli_push_char(cli_term_state *st, char c) {
-    int idx = st->line_count - 1;
+    int logical_idx = st->line_count - 1;
+    int idx = xiao_app_terminal__term_line_slot(st, logical_idx);
     int len = st->line_len[idx];
     if (c == '\t') {
         int k;
@@ -11068,13 +11154,14 @@ static void xiao_app_terminal__cli_push_char(cli_term_state *st, char c) {
     }
     if (len + 1 >= TERM_LINE_MAX) {
         xiao_app_terminal__cli_new_line(st);
-        idx = st->line_count - 1;
+        logical_idx = st->line_count - 1;
+        idx = xiao_app_terminal__term_line_slot(st, logical_idx);
         len = st->line_len[idx];
     }
     st->lines[idx][len] = c;
     st->lines[idx][len + 1] = 0;
     st->line_len[idx] = len + 1;
-    xiao_app_terminal__cli_mark_history_line_dirty(st, idx);
+    xiao_app_terminal__cli_mark_history_line_dirty(st, logical_idx);
 }
 
 static void xiao_app_terminal__cli_feed_output(cli_term_state *st, const char *data, xiao_size len) {
@@ -11139,11 +11226,14 @@ static void xiao_app_terminal__cli_feed_output(cli_term_state *st, const char *d
             xiao_app_terminal__cli_new_line(st);
             continue;
         }
-        if ((c == 0x08 || c == 0x7f) && st->line_len[st->line_count - 1] > 0) {
-            int idx = st->line_count - 1;
-            st->line_len[idx]--;
-            st->lines[idx][st->line_len[idx]] = 0;
-            xiao_app_terminal__cli_mark_history_line_dirty(st, idx);
+        if (c == 0x08 || c == 0x7f) {
+            int logical_idx = st->line_count - 1;
+            int idx = xiao_app_terminal__term_line_slot(st, logical_idx);
+            if (st->line_len[idx] > 0) {
+                st->line_len[idx]--;
+                st->lines[idx][st->line_len[idx]] = 0;
+                xiao_app_terminal__cli_mark_history_line_dirty(st, logical_idx);
+            }
             continue;
         }
         if (c >= 32 && c <= 126) {
@@ -11152,19 +11242,26 @@ static void xiao_app_terminal__cli_feed_output(cli_term_state *st, const char *d
     }
 }
 
-static unsigned int xiao_app_terminal__blend_color(unsigned int rgb, unsigned char alpha) {
-    unsigned int r = ((rgb >> 16) & 0xffu) * (unsigned int)alpha / 255u;
-    unsigned int g = ((rgb >> 8) & 0xffu) * (unsigned int)alpha / 255u;
-    unsigned int b = (rgb & 0xffu) * (unsigned int)alpha / 255u;
-    return (r << 16) | (g << 8) | b;
+static int xiao_app_terminal__term_advance_px(cli_term_state *st, int cp, int next_cp) {
+    int adv = 0;
+    int lsb = 0;
+    int px_fp;
+    stbtt_GetCodepointHMetrics(&st->font, cp, &adv, &lsb);
+    (void)lsb;
+    px_fp = adv * st->scale_fp;
+    if (next_cp > 0) {
+        px_fp += stbtt_GetCodepointKernAdvance(&st->font, cp, next_cp) * st->scale_fp;
+    }
+    if (px_fp >= 0) return (px_fp + (TERM_FP_ONE >> 1)) >> TERM_FP_SHIFT;
+    return -(((-px_fp) + (TERM_FP_ONE >> 1)) >> TERM_FP_SHIFT);
 }
 
 static int xiao_app_terminal__draw_glyph(cli_term_state *st, int pen_x, int baseline_y, int cp, int next_cp, unsigned int color) {
     static unsigned char bitmap[TERM_GLYPH_BITMAP_MAX];
+    const term_color_lut *lut = term_pick_lut(st, color);
     int x0, y0, x1, y1;
     int w, h;
     int gx, gy;
-    int advance, lsb;
 
     if (cp < 32 || cp > 126) cp = '?';
 
@@ -11178,21 +11275,45 @@ static int xiao_app_terminal__draw_glyph(cli_term_state *st, int pen_x, int base
         for (gy = 0; gy < h; gy++) {
             int py = baseline_y + y0 + gy;
             if (py < 0 || py >= st->screen_h) continue;
-            for (gx = 0; gx < w; gx++) {
+            gx = 0;
+            while (gx < w) {
                 unsigned char a = bitmap[gy * w + gx];
                 int px = pen_x + x0 + gx;
-                if (a == 0 || px < 0 || px >= st->screen_w) continue;
-                xiao_video_draw_pixel_rgb888(st->env, px, py, xiao_app_terminal__blend_color(color, a));
+                if (a == 0 || px >= st->screen_w) {
+                    gx++;
+                    continue;
+                }
+                if (px < 0) {
+                    gx++;
+                    continue;
+                }
+                if (a == 255) {
+                    int run = gx + 1;
+                    while (run < w && bitmap[gy * w + run] == 255) run++;
+                    {
+                        int run_px = pen_x + x0 + gx;
+                        int run_w = run - gx;
+                        if (run_px < 0) {
+                            run_w += run_px;
+                            run_px = 0;
+                        }
+                        if (run_px + run_w > st->screen_w) run_w = st->screen_w - run_px;
+                        if (run_w > 0) xiao_video_fill_rect_rgb888(st->env, run_px, py, run_w, 1, color);
+                    }
+                    gx = run;
+                    continue;
+                }
+                if (lut) {
+                    xiao_video_draw_pixel_rgb888(st->env, px, py, lut->table[a]);
+                } else {
+                    xiao_video_draw_pixel_rgb888(st->env, px, py, color);
+                }
+                gx++;
             }
         }
     }
 
-    stbtt_GetCodepointHMetrics(&st->font, cp, &advance, &lsb);
-    (void)lsb;
-    pen_x += (int)((float)advance * st->scale + 0.5f);
-    if (next_cp > 0) {
-        pen_x += (int)((float)stbtt_GetCodepointKernAdvance(&st->font, cp, next_cp) * st->scale + 0.5f);
-    }
+    pen_x += xiao_app_terminal__term_advance_px(st, cp, next_cp);
     return pen_x;
 }
 
@@ -11202,12 +11323,7 @@ static int xiao_app_terminal__text_width_n(cli_term_state *st, const char *text,
     while (text[i] && (n < 0 || i < n)) {
         int cp = (unsigned char)text[i];
         int next_cp = text[i + 1] ? (unsigned char)text[i + 1] : 0;
-        int adv = 0;
-        int lsb = 0;
-        stbtt_GetCodepointHMetrics(&st->font, cp, &adv, &lsb);
-        (void)lsb;
-        width += (int)((float)adv * st->scale + 0.5f);
-        if (next_cp > 0) width += (int)((float)stbtt_GetCodepointKernAdvance(&st->font, cp, next_cp) * st->scale + 0.5f);
+        width += xiao_app_terminal__term_advance_px(st, cp, next_cp);
         i++;
     }
     return width;
@@ -11226,22 +11342,27 @@ static int xiao_app_terminal__common_prefix_len(const char *a, const char *b) {
 static void xiao_app_terminal__draw_text_from_index(cli_term_state *st, int x, int y, const char *text, int start, unsigned int color) {
     int pen_x = x;
     int baseline = y + st->ascent_px;
-    int i = 0;
-    while (text[i]) {
-        int cp = (unsigned char)text[i];
-        int next_cp = text[i + 1] ? (unsigned char)text[i + 1] : 0;
+    int text_len = 0;
+    int i;
+    int cpv[TERM_LINE_MAX];
+    int adv[TERM_LINE_MAX];
+
+    while (text[text_len] && text_len < TERM_LINE_MAX - 1) {
+        cpv[text_len] = (unsigned char)text[text_len];
+        text_len++;
+    }
+    for (i = 0; i < text_len; i++) {
+        int next_cp = (i + 1 < text_len) ? cpv[i + 1] : 0;
+        adv[i] = xiao_app_terminal__term_advance_px(st, cpv[i], next_cp);
+    }
+    for (i = 0; i < text_len; i++) {
+        int next_cp = (i + 1 < text_len) ? cpv[i + 1] : 0;
         if (i >= start) {
-            pen_x = xiao_app_terminal__draw_glyph(st, pen_x, baseline, cp, next_cp, color);
+            pen_x = xiao_app_terminal__draw_glyph(st, pen_x, baseline, cpv[i], next_cp, color);
         } else {
-            int adv = 0;
-            int lsb = 0;
-            stbtt_GetCodepointHMetrics(&st->font, cp, &adv, &lsb);
-            (void)lsb;
-            pen_x += (int)((float)adv * st->scale + 0.5f);
-            if (next_cp > 0) pen_x += (int)((float)stbtt_GetCodepointKernAdvance(&st->font, cp, next_cp) * st->scale + 0.5f);
+            pen_x += adv[i];
         }
         if (pen_x >= st->screen_w - TERM_MARGIN) break;
-        i++;
     }
 }
 
@@ -11261,15 +11382,43 @@ static void xiao_app_terminal__render_output_row(cli_term_state *st, int row) {
     h = st->line_height;
     idx = st->view_start + row;
     if (idx >= 0 && idx < st->line_count) {
-        xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
-        xiao_app_terminal__draw_text(st, TERM_MARGIN, y, st->lines[idx], TERM_TEXT_COLOR);
+        int slot = xiao_app_terminal__term_line_slot(st, idx);
+        int new_len = st->line_len[slot];
+        int old_len = st->row_cache_len[row];
+        int redraw_from = 0;
+        int redraw_x;
+        int old_width;
+        int new_width;
+        int clear_end;
+
+        if (st->row_cache_kind[row] == TERM_ROW_KIND_HISTORY &&
+            xiao_app_terminal__term_cstr_eq_n(st->row_cache_text[row], old_len, st->lines[slot], new_len)) {
+            return;
+        }
+        if (st->row_cache_kind[row] == TERM_ROW_KIND_HISTORY) {
+            int prefix = xiao_app_terminal__common_prefix_len(st->row_cache_text[row], st->lines[slot]);
+            redraw_from = prefix > 0 ? prefix - 1 : 0;
+        }
+        redraw_x = TERM_MARGIN + xiao_app_terminal__text_width_n(st, st->lines[slot], redraw_from);
+        old_width = xiao_app_terminal__text_width_n(st, st->row_cache_text[row], old_len);
+        new_width = xiao_app_terminal__text_width_n(st, st->lines[slot], new_len);
+        clear_end = TERM_MARGIN + xiao_app_terminal__term_max(old_width, new_width) + 12;
+        if (st->row_cache_kind[row] != TERM_ROW_KIND_HISTORY || redraw_x < TERM_MARGIN) {
+            redraw_x = 0;
+        }
+        if (clear_end < redraw_x + 12) clear_end = redraw_x + 12;
+        if (clear_end > st->screen_w) clear_end = st->screen_w;
+        xiao_video_fill_rect_rgb888(st->env, redraw_x, y, clear_end - redraw_x, h, TERM_BG_COLOR);
+        xiao_app_terminal__draw_text_from_index(st, TERM_MARGIN, y, st->lines[slot], redraw_from, TERM_TEXT_COLOR);
+        st->row_cache_kind[row] = TERM_ROW_KIND_HISTORY;
+        xiao_app_terminal__term_copy_cstr_cap(st->row_cache_text[row], TERM_LINE_MAX, st->lines[slot], &st->row_cache_len[row]);
         return;
     }
     if (idx == st->line_count) {
-        int prompt_x = TERM_MARGIN + (int)(st->scale * 10.0f);
-        int old_width = xiao_app_terminal__text_width_n(st, st->prev_input, st->prev_input_len);
+        int prompt_x = TERM_MARGIN + xiao_app_terminal__text_width_n(st, ">", -1);
+        int old_width = xiao_app_terminal__text_width_n(st, st->row_cache_text[row], st->row_cache_len[row]);
         int new_width = xiao_app_terminal__text_width(st, st->input);
-        int prefix = xiao_app_terminal__common_prefix_len(st->prev_input, st->input);
+        int prefix = st->row_cache_kind[row] == TERM_ROW_KIND_INPUT ? xiao_app_terminal__common_prefix_len(st->row_cache_text[row], st->input) : 0;
         int redraw_from = prefix > 0 ? prefix - 1 : 0;
         int redraw_x = prompt_x + xiao_app_terminal__text_width_n(st, st->input, redraw_from);
         int clear_end = prompt_x + (old_width > new_width ? old_width : new_width) + 12;
@@ -11280,7 +11429,7 @@ static void xiao_app_terminal__render_output_row(cli_term_state *st, int row) {
             st->input_row_init = 0;
         }
 
-        if (!st->input_row_init) {
+        if (!st->input_row_init || st->row_cache_kind[row] != TERM_ROW_KIND_INPUT) {
             xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
             xiao_app_terminal__draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
             xiao_app_terminal__draw_text(st, prompt_x, y, st->input, TERM_INPUT_COLOR);
@@ -11298,17 +11447,17 @@ static void xiao_app_terminal__render_output_row(cli_term_state *st, int row) {
         xiao_video_fill_rect_rgb888(st->env, cursor_x, y + h - 4, 10, 2, TERM_CURSOR_COLOR);
         st->cursor_prev_x = cursor_x;
         st->prev_input_len = st->input_len;
-        {
-            int i;
-            for (i = 0; i < TERM_INPUT_MAX; i++) {
-                st->prev_input[i] = st->input[i];
-                if (st->input[i] == 0) break;
-            }
-            st->prev_input[TERM_INPUT_MAX] = 0;
-        }
+        xiao_app_terminal__term_copy_cstr_cap(st->prev_input, TERM_INPUT_MAX + 1, st->input, 0);
+        st->row_cache_kind[row] = TERM_ROW_KIND_INPUT;
+        xiao_app_terminal__term_copy_cstr_cap(st->row_cache_text[row], TERM_LINE_MAX, st->input, &st->row_cache_len[row]);
         return;
     }
-    xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
+    if (st->row_cache_kind[row] != TERM_ROW_KIND_NONE) {
+        xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
+        st->row_cache_kind[row] = TERM_ROW_KIND_NONE;
+        st->row_cache_len[row] = 0;
+        st->row_cache_text[row][0] = 0;
+    }
 }
 
 static void xiao_app_terminal__cli_render_dirty(cli_term_state *st) {
@@ -11326,6 +11475,7 @@ static void xiao_app_terminal__cli_render_dirty(cli_term_state *st) {
 }
 
 static void xiao_app_terminal__cli_init_layers(cli_term_state *st) {
+    int i;
     st->output_rows = (st->screen_h - TERM_MARGIN * 2) / st->line_height;
     if (st->output_rows < 1) st->output_rows = 1;
     if (st->output_rows > TERM_LINE_COUNT - 1) st->output_rows = TERM_LINE_COUNT - 1;
@@ -11338,6 +11488,14 @@ static void xiao_app_terminal__cli_init_layers(cli_term_state *st) {
     st->input_row = -1;
     st->prev_input_len = 0;
     st->prev_input[0] = 0;
+    for (i = 0; i < TERM_LINE_COUNT; i++) {
+        st->row_cache_kind[i] = TERM_ROW_KIND_NONE;
+        st->row_cache_len[i] = 0;
+        st->row_cache_text[i][0] = 0;
+    }
+    xiao_app_terminal__term_init_color_lut(&st->lut_text, TERM_TEXT_COLOR);
+    xiao_app_terminal__term_init_color_lut(&st->lut_prompt, TERM_PROMPT_COLOR);
+    xiao_app_terminal__term_init_color_lut(&st->lut_input, TERM_INPUT_COLOR);
     xiao_video_fill_rect_rgb888(st->env, 0, 0, st->screen_w, st->screen_h, TERM_BG_COLOR);
     xiao_app_terminal__cli_mark_all_output_dirty(st);
 }
@@ -11451,6 +11609,7 @@ static int xiao_app_terminal__run_cli_terminal(xiao_env *env) {
     }
 
     st->scale = stbtt_ScaleForPixelHeight(&st->font, TERM_FONT_PIXELS);
+    st->scale_fp = (int)(st->scale * (float)TERM_FP_ONE + 0.5f);
     stbtt_GetFontVMetrics(&st->font, &ascent, &descent, &line_gap);
     st->ascent_px = (int)((float)ascent * st->scale + 0.5f);
     st->line_height = (int)(((float)(ascent - descent + line_gap)) * st->scale + 0.5f);

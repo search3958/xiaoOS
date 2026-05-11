@@ -5,6 +5,7 @@ cd "$(dirname "$0")"
 make bios
 
 exec qemu-system-i386 \
+    -m 512M \
     -drive file=build/bios/xiao-bios.img,format=raw \
     -nographic \
     -monitor none \

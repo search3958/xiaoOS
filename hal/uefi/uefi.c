@@ -142,14 +142,13 @@ static EFI_GRAPHICS_OUTPUT_PROTOCOL *uefi_get_gop(void) {
     return gop;
 }
 
-static void uefi_enter_best_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop) {
+static UINT32 uefi_pick_best_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop) {
     UINT32 i;
-    UINT32 best_mode;
-    UINT32 best_pixels;
-    if (!ggop || !ggop->Mode || !ggop->QueryMode || !ggop->SetMode) return;
+    UINT32 best_mode = 0;
+    UINT32 best_pixels = 0;
+    if (!ggop || !ggop->Mode || !ggop->QueryMode) return 0;
 
     best_mode = ggop->Mode->Mode;
-    best_pixels = 0;
     for (i = 0; i < ggop->Mode->MaxMode; i++) {
         UINTN info_size = 0;
         EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = 0;
@@ -164,14 +163,35 @@ static void uefi_enter_best_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop) {
             }
         }
     }
-    ggop->SetMode(ggop, best_mode);
+    return best_mode;
+}
+
+static int uefi_set_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop, int w, int h) {
+    UINT32 i;
+    if (!ggop || !ggop->Mode || !ggop->QueryMode || !ggop->SetMode) return -1;
+    for (i = 0; i < ggop->Mode->MaxMode; i++) {
+        UINTN info_size = 0;
+        EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = 0;
+        if (ggop->QueryMode(ggop, i, &info_size, &info) == EFI_SUCCESS && info) {
+            int matched = (int)info->HorizontalResolution == w && (int)info->VerticalResolution == h;
+            if (st && st->BootServices && st->BootServices->FreePool) st->BootServices->FreePool(info);
+            if (matched) return ggop->SetMode(ggop, i) == EFI_SUCCESS ? 0 : -1;
+        }
+    }
+    return -1;
+}
+
+static void uefi_enter_default_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop) {
+    if (!ggop || !ggop->Mode || !ggop->SetMode) return;
+    if (uefi_set_graphics_mode(ggop, 1280, 720) == 0) return;
+    ggop->SetMode(ggop, uefi_pick_best_graphics_mode(ggop));
 }
 
 static int uefi_prepare_gop(void) {
     EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop = uefi_get_gop();
     if (!ggop || !ggop->Mode || !ggop->Mode->Info) return -1;
     if (!gop_mode_ready) {
-        uefi_enter_best_graphics_mode(ggop);
+        uefi_enter_default_graphics_mode(ggop);
         gop_mode_ready = 1;
     }
     return 0;
@@ -223,6 +243,12 @@ static int uefi_video_size(int *w, int *h) {
     return 0;
 }
 
+static int uefi_video_set_mode(int w, int h) {
+    if (w <= 0 || h <= 0) return -1;
+    if (uefi_prepare_gop() != 0) return -1;
+    return uefi_set_graphics_mode(gop, w, h);
+}
+
 static int uefi_video_draw_pixel_rgb888(int x, int y, unsigned int rgb888) {
     EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode;
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
@@ -232,6 +258,15 @@ static int uefi_video_draw_pixel_rgb888(int x, int y, unsigned int rgb888) {
     mode = gop->Mode;
     info = mode->Info;
     if (x < 0 || y < 0 || x >= (int)info->HorizontalResolution || y >= (int)info->VerticalResolution) return -1;
+    if (info->PixelFormat == PixelBltOnly) {
+        EFI_GRAPHICS_OUTPUT_BLT_PIXEL px;
+        if (!gop->Blt) return -1;
+        px.Red = (u8)((rgb888 >> 16) & 0xff);
+        px.Green = (u8)((rgb888 >> 8) & 0xff);
+        px.Blue = (u8)(rgb888 & 0xff);
+        px.Reserved = 0;
+        return gop->Blt(gop, &px, EfiBltVideoFill, 0, 0, (UINTN)x, (UINTN)y, 1, 1, 0) == EFI_SUCCESS ? 0 : -1;
+    }
     if (uefi_color_from_rgb888(info, rgb888, &color) != 0) return -1;
     fb = (volatile UINT32 *)(UINTN)mode->FrameBufferBase;
     if (!fb) return -1;
@@ -250,9 +285,6 @@ static int uefi_video_fill_rect_rgb888(int x, int y, int w, int h, unsigned int 
     if (uefi_prepare_gop() != 0) return -1;
     mode = gop->Mode;
     info = mode->Info;
-    if (uefi_color_from_rgb888(info, rgb888, &color) != 0) return -1;
-    fb = (volatile UINT32 *)(UINTN)mode->FrameBufferBase;
-    if (!fb) return -1;
     x0 = x < 0 ? 0 : x;
     y0 = y < 0 ? 0 : y;
     x1 = x + w;
@@ -260,6 +292,18 @@ static int uefi_video_fill_rect_rgb888(int x, int y, int w, int h, unsigned int 
     if (x1 > (int)info->HorizontalResolution) x1 = (int)info->HorizontalResolution;
     if (y1 > (int)info->VerticalResolution) y1 = (int)info->VerticalResolution;
     if (x0 >= x1 || y0 >= y1) return -1;
+    if (info->PixelFormat == PixelBltOnly) {
+        EFI_GRAPHICS_OUTPUT_BLT_PIXEL px;
+        if (!gop->Blt) return -1;
+        px.Red = (u8)((rgb888 >> 16) & 0xff);
+        px.Green = (u8)((rgb888 >> 8) & 0xff);
+        px.Blue = (u8)(rgb888 & 0xff);
+        px.Reserved = 0;
+        return gop->Blt(gop, &px, EfiBltVideoFill, 0, 0, (UINTN)x0, (UINTN)y0, (UINTN)(x1 - x0), (UINTN)(y1 - y0), 0) == EFI_SUCCESS ? 0 : -1;
+    }
+    if (uefi_color_from_rgb888(info, rgb888, &color) != 0) return -1;
+    fb = (volatile UINT32 *)(UINTN)mode->FrameBufferBase;
+    if (!fb) return -1;
 
     for (yy = y0; yy < y1; yy++) {
         UINTN row = (UINTN)yy * (UINTN)info->PixelsPerScanLine;
@@ -286,6 +330,7 @@ static const xiao_hal uefi_hal = {
     uefi_video_draw_pixel_rgb888,
     uefi_video_fill_rect_rgb888,
     uefi_video_size,
+    uefi_video_set_mode,
     XIAO_PLATFORM_PC,
 };
 

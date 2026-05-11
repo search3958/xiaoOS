@@ -153,6 +153,21 @@ typedef struct EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE {
     UINTN FrameBufferSize;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
 
+typedef struct {
+    UINT8 Blue;
+    UINT8 Green;
+    UINT8 Red;
+    UINT8 Reserved;
+} EFI_GRAPHICS_OUTPUT_BLT_PIXEL;
+
+typedef enum {
+    EfiBltVideoFill,
+    EfiBltVideoToBltBuffer,
+    EfiBltBufferToVideo,
+    EfiBltVideoToVideo,
+    EfiGraphicsOutputBltOperationMax
+} EFI_GRAPHICS_OUTPUT_BLT_OPERATION;
+
 struct EFI_GRAPHICS_OUTPUT_PROTOCOL;
 typedef EFI_STATUS (*EFI_GRAPHICS_OUTPUT_PROTOCOL_QUERY_MODE)(
     struct EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
@@ -164,11 +179,23 @@ typedef EFI_STATUS (*EFI_GRAPHICS_OUTPUT_PROTOCOL_SET_MODE)(
     struct EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
     UINT32 ModeNumber
 );
+typedef EFI_STATUS (*EFI_GRAPHICS_OUTPUT_PROTOCOL_BLT)(
+    struct EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
+    EFI_GRAPHICS_OUTPUT_BLT_PIXEL *BltBuffer,
+    EFI_GRAPHICS_OUTPUT_BLT_OPERATION BltOperation,
+    UINTN SourceX,
+    UINTN SourceY,
+    UINTN DestinationX,
+    UINTN DestinationY,
+    UINTN Width,
+    UINTN Height,
+    UINTN Delta
+);
 
 typedef struct EFI_GRAPHICS_OUTPUT_PROTOCOL {
     EFI_GRAPHICS_OUTPUT_PROTOCOL_QUERY_MODE QueryMode;
     EFI_GRAPHICS_OUTPUT_PROTOCOL_SET_MODE SetMode;
-    void *Blt;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_BLT Blt;
     EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
 

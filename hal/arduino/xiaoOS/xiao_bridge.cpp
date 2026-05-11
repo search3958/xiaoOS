@@ -777,6 +777,13 @@ int xiao_video_size(xiao_env *env, int *w, int *h) {
     return -1;
 }
 
+int xiao_video_set_mode(xiao_env *env, int w, int h) {
+    if (env && env->hal && env->hal->video_set_mode) {
+        return env->hal->video_set_mode(w, h);
+    }
+    return -1;
+}
+
 int xiao_platform(xiao_env *env) {
     if (env && env->hal) return env->hal->platform;
     return XIAO_PLATFORM_UNKNOWN;
@@ -817,6 +824,7 @@ int xiao_app_touch(xiao_env *env);
 int xiao_app_uname(xiao_env *env);
 int xiao_app_uniq(xiao_env *env);
 int xiao_app_wc(xiao_env *env);
+int xiao_app_xrandr(xiao_env *env);
 int xiao_app_xuexi(xiao_env *env);
 
 static const char boot_text[] =
@@ -1971,6 +1979,7 @@ static const xiao_app app_table[] = {
     { "uname", xiao_app_uname },
     { "uniq", xiao_app_uniq },
     { "wc", xiao_app_wc },
+    { "xrandr", xiao_app_xrandr },
     { "xuexi", xiao_app_xuexi },
 };
 
@@ -2770,12 +2779,12 @@ int xiao_app_red(xiao_env *env) {
     int step;
     int total_steps = 80;
 
-    if (xiao_video_fill_rgb888(env, 0xAA0000u) != 0) {
-        xiao_console_print(env, "red: video fill is not supported on this target\r\n");
-        return 1;
-    }
     if (xiao_video_size(env, &sw, &sh) != 0) {
         xiao_console_print(env, "red: video size is not available\r\n");
+        return 1;
+    }
+    if (xiao_video_fill_rect_rgb888(env, 0, 0, sw, sh, 0xAA0000u) != 0) {
+        xiao_console_print(env, "red: background draw failed\r\n");
         return 1;
     }
 
@@ -2783,8 +2792,7 @@ int xiao_app_red(xiao_env *env) {
         int size = step;
         int x = sw / 2 - size / 2;
         int y = sh / 2 - size / 2;
-        xiao_video_fill_rgb888(env, 0xAA0000u);
-        xiao_video_fill_rect_rgb888(env, x, y, size, size, 0xFFDDADu);
+        xiao_video_fill_rect_rgb888(env, x, y, size, size, 0xFFCB52u);
         xiao_wait(env, 25);
     }
     return 0;
@@ -3210,7 +3218,7 @@ int xiao_app_touch(xiao_env *env) {
 #include "xiao.h"
 
 int xiao_app_uname(xiao_env *env) {
-    xiao_console_print(env, "xiaoOS\r\n");
+    xiao_console_print(env, "BaramOS (NEXT)\r\n");
     return 0;
 }
 
@@ -3344,6 +3352,95 @@ int xiao_app_wc(xiao_env *env) {
         xiao_app_wc__print_counts(env, total_l, total_w, total_b, "total");
     }
     return 0;
+}
+
+
+#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/xrandr.c"
+#include "xiao.h"
+
+static int xiao_app_xrandr__streq(const char *a, const char *b) {
+    while (*a && *b && *a == *b) { a++; b++; }
+    return *a == 0 && *b == 0;
+}
+
+static void xiao_app_xrandr__print_uint(xiao_env *env, unsigned int v) {
+    char buf[24];
+    int i = 23;
+    buf[i--] = 0;
+    if (v == 0) {
+        xiao_console_print(env, "0");
+        return;
+    }
+    while (v > 0 && i >= 0) {
+        buf[i--] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    xiao_console_print(env, &buf[i + 1]);
+}
+
+static int xiao_app_xrandr__parse_mode(const char *s, int *w, int *h) {
+    int vw = 0;
+    int vh = 0;
+    if (!s || !w || !h) return -1;
+    while (*s >= '0' && *s <= '9') {
+        vw = vw * 10 + (*s - '0');
+        s++;
+    }
+    if (*s != 'x' && *s != 'X') return -1;
+    s++;
+    while (*s >= '0' && *s <= '9') {
+        vh = vh * 10 + (*s - '0');
+        s++;
+    }
+    if (*s != 0 || vw <= 0 || vh <= 0) return -1;
+    *w = vw;
+    *h = vh;
+    return 0;
+}
+
+static void xiao_app_xrandr__print_current(xiao_env *env) {
+    int w = 0;
+    int h = 0;
+    if (xiao_video_size(env, &w, &h) != 0) {
+        xiao_console_print(env, "xrandr: current mode unavailable\r\n");
+        return;
+    }
+    xiao_console_print(env, "Screen 0: current ");
+    xiao_app_xrandr__print_uint(env, (unsigned int)w);
+    xiao_console_print(env, " x ");
+    xiao_app_xrandr__print_uint(env, (unsigned int)h);
+    xiao_console_print(env, "\r\n");
+}
+
+int xiao_app_xrandr(xiao_env *env) {
+    if (xiao_platform(env) == XIAO_PLATFORM_ESP32) {
+        xiao_console_print(env, "xrandr: not supported on esp32\r\n");
+        return 1;
+    }
+
+    if (xiao_argc(env) == 1 || (xiao_argc(env) == 2 && xiao_app_xrandr__streq(xiao_argv(env, 1), "-q"))) {
+        xiao_app_xrandr__print_current(env);
+        return 0;
+    }
+
+    if (xiao_argc(env) == 3 && xiao_app_xrandr__streq(xiao_argv(env, 1), "-s")) {
+        int w = 0;
+        int h = 0;
+        if (xiao_app_xrandr__parse_mode(xiao_argv(env, 2), &w, &h) != 0) {
+            xiao_console_print(env, "xrandr: invalid mode format, use WIDTHxHEIGHT\r\n");
+            return 1;
+        }
+        if (xiao_video_set_mode(env, w, h) != 0) {
+            xiao_console_print(env, "xrandr: failed to set mode\r\n");
+            return 1;
+        }
+        xiao_app_xrandr__print_current(env);
+        return 0;
+    }
+
+    xiao_console_print(env, "usage: xrandr [-q]\r\n");
+    xiao_console_print(env, "   or: xrandr -s WIDTHxHEIGHT\r\n");
+    return 1;
 }
 
 

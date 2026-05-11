@@ -32,6 +32,7 @@ static const xiao_hal arduino_hal = {
     0,
     0,
     0,
+    0,
     XIAO_PLATFORM_UNKNOWN,
 };
 

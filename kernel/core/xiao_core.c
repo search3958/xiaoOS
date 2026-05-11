@@ -773,6 +773,13 @@ int xiao_video_size(xiao_env *env, int *w, int *h) {
     return -1;
 }
 
+int xiao_video_set_mode(xiao_env *env, int w, int h) {
+    if (env && env->hal && env->hal->video_set_mode) {
+        return env->hal->video_set_mode(w, h);
+    }
+    return -1;
+}
+
 int xiao_platform(xiao_env *env) {
     if (env && env->hal) return env->hal->platform;
     return XIAO_PLATFORM_UNKNOWN;

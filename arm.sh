@@ -29,7 +29,7 @@ exec qemu-system-aarch64 \
     -M virt \
     -cpu cortex-a72 \
     -m 512M \
-    -device ramfb \
+    -device virtio-gpu-pci,xres=1280,yres=720 \
     -device qemu-xhci \
     -device usb-kbd \
     -device usb-tablet \

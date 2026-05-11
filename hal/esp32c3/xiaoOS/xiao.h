@@ -41,6 +41,7 @@ typedef struct {
     int (*video_draw_pixel_rgb888)(int x, int y, unsigned int rgb888);
     int (*video_fill_rect_rgb888)(int x, int y, int w, int h, unsigned int rgb888);
     int (*video_size)(int *w, int *h);
+    int (*video_set_mode)(int w, int h);
     int platform;
 } xiao_hal;
 
@@ -104,6 +105,7 @@ int xiao_video_fill_rgb888(xiao_env *env, unsigned int rgb888);
 int xiao_video_draw_pixel_rgb888(xiao_env *env, int x, int y, unsigned int rgb888);
 int xiao_video_fill_rect_rgb888(xiao_env *env, int x, int y, int w, int h, unsigned int rgb888);
 int xiao_video_size(xiao_env *env, int *w, int *h);
+int xiao_video_set_mode(xiao_env *env, int w, int h);
 int xiao_platform(xiao_env *env);
 
 extern const xiao_boot_image xiao_image;

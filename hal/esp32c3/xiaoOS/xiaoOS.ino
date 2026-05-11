@@ -332,6 +332,12 @@ static int esp32c3_video_size(int *w, int *h) {
     return 0;
 }
 
+static int esp32c3_video_set_mode(int w, int h) {
+    (void)w;
+    (void)h;
+    return -1;
+}
+
 static const xiao_hal esp32c3_hal = {
     esp32c3_serial_write,
     esp32c3_serial_write,
@@ -342,6 +348,7 @@ static const xiao_hal esp32c3_hal = {
     esp32c3_video_draw_pixel_rgb888,
     esp32c3_video_fill_rect_rgb888,
     esp32c3_video_size,
+    esp32c3_video_set_mode,
     XIAO_PLATFORM_ESP32,
 };
 

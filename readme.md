@@ -25,3 +25,4 @@ PCではBIOS boot sectorまたはUEFI applicationが同じ `xiao_start()` を呼
 - `./32.sh`: x86 BIOS。BIOS版は確認しやすさ優先で `-nographic` 起動です。
 - `./64.sh`: x86_64 UEFI。QEMU画面にOS出力します。
 - `./arm.sh`: AArch64 UEFI。QEMU virt向けにUSB/virtio keyboardを明示しています。
+- `./rp.sh`: Raspberry Pi系プロファイル（QEMU raspi3b, Pi2クラス想定）で起動します。

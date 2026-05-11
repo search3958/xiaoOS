@@ -31,6 +31,9 @@ static xiao_fs_node fs_nodes[XIAO_FS_MAX_NODES];
 static char fs_ram[XIAO_FS_RAM_SIZE];
 static xiao_size fs_ram_used;
 static char fs_cwd[XIAO_FS_MAX_PATH];
+static int xiao_mode = XIAO_MODE_TEXT;
+static xiao_console_sink_fn console_sink;
+static void *console_sink_ctx;
 
 static xiao_size xiao_strlen(const char *s) {
     xiao_size n = 0;
@@ -411,6 +414,9 @@ void xiao_start(const xiao_hal *hal, const xiao_boot_image *image) {
     current_env.ipc.argc = 0;
     current_env.ipc.argv = 0;
     current_image = image;
+    xiao_mode = XIAO_MODE_TEXT;
+    console_sink = 0;
+    console_sink_ctx = 0;
     xiao_fs_init(image);
     for (i = 0; i < XIAO_MAX_TASKS; i++) tasks[i].active = 0;
     if (image) xiao_run_boot_text(image);
@@ -428,6 +434,7 @@ void xiao_console_print(xiao_env *env, const char *text) {
 }
 
 void xiao_console_write(xiao_env *env, const char *data, xiao_size len) {
+    if (console_sink && console_sink(console_sink_ctx, data, len)) return;
     if (env && env->hal && env->hal->console_write) {
         env->hal->console_write(data, len);
     }
@@ -783,4 +790,19 @@ int xiao_video_set_mode(xiao_env *env, int w, int h) {
 int xiao_platform(xiao_env *env) {
     if (env && env->hal) return env->hal->platform;
     return XIAO_PLATFORM_UNKNOWN;
+}
+
+int xiao_mode_get(void) {
+    return xiao_mode;
+}
+
+int xiao_mode_set(int mode) {
+    if (mode != XIAO_MODE_TEXT && mode != XIAO_MODE_CLI && mode != XIAO_MODE_GUI) return -1;
+    xiao_mode = mode;
+    return 0;
+}
+
+void xiao_console_set_sink(xiao_console_sink_fn sink, void *ctx) {
+    console_sink = sink;
+    console_sink_ctx = ctx;
 }

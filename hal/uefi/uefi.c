@@ -15,6 +15,7 @@ static EFI_SYSTEM_TABLE *st;
 static int esc_state;
 static EFI_GRAPHICS_OUTPUT_PROTOCOL *gop;
 static int gop_mode_ready;
+int _fltused = 0;
 
 static const EFI_GUID gop_guid = {
     0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}

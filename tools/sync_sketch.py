@@ -85,6 +85,9 @@ def sync(sketch_dir):
     sketch.mkdir(parents=True, exist_ok=True)
 
     (sketch / "xiao.h").write_text((ROOT / "include/xiao.h").read_text())
+    stb_header = ROOT / "apps/stb_truetype.h"
+    if stb_header.exists():
+        (sketch / "stb_truetype.h").write_text(stb_header.read_text())
 
     image_source, app_sources = generated_image_source()
     bridge = []

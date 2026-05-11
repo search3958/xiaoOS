@@ -238,7 +238,7 @@ static void gc9a01_init(void) {
     gc9a01_write_cmd(0x11);  // SLPOUT
     delay(120);
     gc9a01_write_cmd(0x36);  // MADCTL
-    gc9a01_write_data8(0x08);  // BGR order
+    gc9a01_write_data8(0x48);  // MX + BGR (fix horizontal mirror)
     gc9a01_write_cmd(0x3A);  // COLMOD
     gc9a01_write_data8(0x55);  // RGB565
     {

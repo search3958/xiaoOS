@@ -1,6 +1,20 @@
 #include "xiao.h"
+#include <stddef.h>
 
-static int xiao_streq_local(const char *a, const char *b) {
+#define TERM_LINE_COUNT 128
+#define TERM_LINE_MAX 200
+#define TERM_INPUT_MAX 127
+#define TERM_GLYPH_BITMAP_MAX (128 * 128)
+#define TERM_FONT_PIXELS 24.0f
+#define TERM_MARGIN 12
+#define TERM_BG_COLOR 0x101318u
+#define TERM_TEXT_COLOR 0xE8EEF6u
+#define TERM_PROMPT_COLOR 0x8FA4BAu
+#define TERM_INPUT_COLOR 0xFFCB52u
+#define TERM_CURSOR_COLOR 0xE8EEF6u
+#define TTF_ARENA_SIZE (128 * 1024)
+
+static int streq(const char *a, const char *b) {
     while (*a && *b && *a == *b) {
         a++;
         b++;
@@ -8,7 +22,517 @@ static int xiao_streq_local(const char *a, const char *b) {
     return *a == 0 && *b == 0;
 }
 
-int xiao_app_entry(xiao_env *env) {
+static xiao_size xstrlen(const char *s) {
+    xiao_size n = 0;
+    while (s && s[n]) n++;
+    return n;
+}
+
+static int parse_mode_name(const char *s) {
+    if (!s) return -1;
+    if (streq(s, "text")) return XIAO_MODE_TEXT;
+    if (streq(s, "cli")) return XIAO_MODE_CLI;
+    if (streq(s, "gui")) return XIAO_MODE_GUI;
+    return -1;
+}
+
+static int run_text_terminal(xiao_env *env);
+
+#ifndef XIAO_TTF_TERMINAL_DISABLED
+#define STBTT_STATIC
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
+
+typedef struct {
+    unsigned int used;
+    unsigned char buf[TTF_ARENA_SIZE];
+} ttf_arena_state;
+
+static ttf_arena_state ttf_arena;
+
+static void *ttf_malloc(unsigned int size, void *userdata) {
+    unsigned int aligned;
+    (void)userdata;
+    if (size == 0) size = 1;
+    aligned = (size + 7u) & ~7u;
+    if (ttf_arena.used + aligned > TTF_ARENA_SIZE) return 0;
+    {
+        void *ptr = ttf_arena.buf + ttf_arena.used;
+        ttf_arena.used += aligned;
+        return ptr;
+    }
+}
+
+static void ttf_free(void *ptr, void *userdata) {
+    (void)ptr;
+    (void)userdata;
+}
+
+static void ttf_reset_alloc(void) {
+    ttf_arena.used = 0;
+}
+
+static void *ttf_memcpy(void *dst, const void *src, xiao_size n) {
+    xiao_size i;
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+    for (i = 0; i < n; i++) d[i] = s[i];
+    return dst;
+}
+
+static void *ttf_memset(void *dst, int value, xiao_size n) {
+    xiao_size i;
+    unsigned char *d = (unsigned char *)dst;
+    for (i = 0; i < n; i++) d[i] = (unsigned char)value;
+    return dst;
+}
+
+static float ttf_fabs(float x) {
+    return x < 0.0f ? -x : x;
+}
+
+static int ttf_ifloor(float x) {
+    int i = (int)x;
+    return (i > x) ? (i - 1) : i;
+}
+
+static int ttf_iceil(float x) {
+    int i = (int)x;
+    return (i < x) ? (i + 1) : i;
+}
+
+static float ttf_sqrt(float x) {
+    float r;
+    int i;
+    if (x <= 0.0f) return 0.0f;
+    r = x > 1.0f ? x : 1.0f;
+    for (i = 0; i < 8; i++) {
+        r = 0.5f * (r + x / r);
+    }
+    return r;
+}
+
+static float ttf_fmod(float x, float y) {
+    int q;
+    if (y == 0.0f) return 0.0f;
+    q = (int)(x / y);
+    return x - (float)q * y;
+}
+
+static float ttf_pow(float x, float y) {
+    int e;
+    float r = 1.0f;
+    if (y == 0.0f) return 1.0f;
+    e = (int)y;
+    if ((float)e != y || e < 0) {
+        return x > 0.0f ? ttf_sqrt(x) : 0.0f;
+    }
+    while (e > 0) {
+        r *= x;
+        e--;
+    }
+    return r;
+}
+
+static float ttf_cos(float x) {
+    float x2;
+    while (x > 3.1415926f) x -= 6.2831852f;
+    while (x < -3.1415926f) x += 6.2831852f;
+    x2 = x * x;
+    return 1.0f - x2 * 0.5f + (x2 * x2) * (1.0f / 24.0f);
+}
+
+static float ttf_acos(float x) {
+    float y;
+    if (x <= -1.0f) return 3.1415926f;
+    if (x >= 1.0f) return 0.0f;
+    y = ttf_sqrt(1.0f - x * x);
+    if (x == 0.0f) return 1.5707963f;
+    if (x > 0.0f) return y;
+    return 3.1415926f - y;
+}
+
+#define STBTT_assert(x) ((void)(x))
+#define STBTT_malloc(x,u) ttf_malloc((unsigned int)(x), (u))
+#define STBTT_free(x,u) ttf_free((x), (u))
+#define STBTT_strlen(x) xstrlen((x))
+#define STBTT_memcpy(d,s,n) ttf_memcpy((d), (s), (n))
+#define STBTT_memset(d,v,n) ttf_memset((d), (v), (n))
+#define STBTT_ifloor(x) ttf_ifloor((float)(x))
+#define STBTT_iceil(x) ttf_iceil((float)(x))
+#define STBTT_sqrt(x) ttf_sqrt((float)(x))
+#define STBTT_pow(x,y) ttf_pow((float)(x), (float)(y))
+#define STBTT_fmod(x,y) ttf_fmod((float)(x), (float)(y))
+#define STBTT_cos(x) ttf_cos((float)(x))
+#define STBTT_acos(x) ttf_acos((float)(x))
+#define STBTT_fabs(x) ttf_fabs((float)(x))
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb_truetype.h"
+
+typedef struct {
+    xiao_env *env;
+    stbtt_fontinfo font;
+    float scale;
+    int ascent_px;
+    int line_height;
+    int screen_w;
+    int screen_h;
+    int esc_state;
+    int line_count;
+    int line_len[TERM_LINE_COUNT];
+    char lines[TERM_LINE_COUNT][TERM_LINE_MAX];
+    char input[TERM_INPUT_MAX + 1];
+    int input_len;
+    int output_rows;
+    int view_start;
+    int output_dirty_all;
+    int input_dirty;
+    int cursor_prev_x;
+    int input_row_init;
+    int prev_input_len;
+    char prev_input[TERM_INPUT_MAX + 1];
+    unsigned char dirty_rows[TERM_LINE_COUNT];
+} cli_term_state;
+
+static cli_term_state cli_state;
+
+static void cli_mark_all_output_dirty(cli_term_state *st) {
+    int i;
+    for (i = 0; i < TERM_LINE_COUNT; i++) st->dirty_rows[i] = 0;
+    for (i = 0; i < st->output_rows; i++) st->dirty_rows[i] = 1;
+    st->output_dirty_all = 1;
+}
+
+static void cli_mark_output_row_dirty(cli_term_state *st, int row) {
+    if (row < 0 || row >= st->output_rows || row >= TERM_LINE_COUNT) return;
+    st->dirty_rows[row] = 1;
+}
+
+static void cli_mark_history_line_dirty(cli_term_state *st, int history_index) {
+    int row = history_index - st->view_start;
+    cli_mark_output_row_dirty(st, row);
+}
+
+static int cli_sync_view(cli_term_state *st) {
+    int old = st->view_start;
+    int max_start = st->line_count - st->output_rows;
+    if (max_start < 0) max_start = 0;
+    st->view_start = max_start;
+    if (st->view_start != old) {
+        cli_mark_all_output_dirty(st);
+        return 1;
+    }
+    return 0;
+}
+
+static void cli_clear_history(cli_term_state *st) {
+    int i;
+    st->line_count = 1;
+    st->esc_state = 0;
+    st->view_start = 0;
+    for (i = 0; i < TERM_LINE_COUNT; i++) {
+        st->line_len[i] = 0;
+        st->lines[i][0] = 0;
+    }
+    cli_mark_all_output_dirty(st);
+    st->input_dirty = 1;
+    st->input_row_init = 0;
+}
+
+static void cli_new_line(cli_term_state *st) {
+    int i;
+    int view_changed = 0;
+
+    if (st->line_count < TERM_LINE_COUNT) {
+        st->line_len[st->line_count] = 0;
+        st->lines[st->line_count][0] = 0;
+        st->line_count++;
+        view_changed = cli_sync_view(st);
+        if (!view_changed) {
+            cli_mark_history_line_dirty(st, st->line_count - 2);
+            cli_mark_history_line_dirty(st, st->line_count - 1);
+        }
+    } else {
+        for (i = 1; i < TERM_LINE_COUNT; i++) {
+            int j;
+            st->line_len[i - 1] = st->line_len[i];
+            for (j = 0; j < TERM_LINE_MAX; j++) {
+                st->lines[i - 1][j] = st->lines[i][j];
+                if (st->lines[i][j] == 0) break;
+            }
+        }
+        st->line_len[TERM_LINE_COUNT - 1] = 0;
+        st->lines[TERM_LINE_COUNT - 1][0] = 0;
+        cli_sync_view(st);
+        cli_mark_all_output_dirty(st);
+    }
+}
+
+static void cli_push_char(cli_term_state *st, char c) {
+    int idx = st->line_count - 1;
+    int len = st->line_len[idx];
+    if (c == '\t') {
+        int k;
+        for (k = 0; k < 4; k++) cli_push_char(st, ' ');
+        return;
+    }
+    if (len + 1 >= TERM_LINE_MAX) {
+        cli_new_line(st);
+        idx = st->line_count - 1;
+        len = st->line_len[idx];
+    }
+    st->lines[idx][len] = c;
+    st->lines[idx][len + 1] = 0;
+    st->line_len[idx] = len + 1;
+    cli_mark_history_line_dirty(st, idx);
+}
+
+static void cli_feed_output(cli_term_state *st, const char *data, xiao_size len) {
+    xiao_size i;
+
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)data[i];
+
+        if (st->esc_state == 1) {
+            st->esc_state = (c == '[') ? 2 : 0;
+            continue;
+        }
+        if (st->esc_state == 2) {
+            if (c == '2') {
+                st->esc_state = 3;
+            } else {
+                st->esc_state = 0;
+            }
+            continue;
+        }
+        if (st->esc_state == 3) {
+            if (c == 'J') {
+                cli_clear_history(st);
+            }
+            st->esc_state = 0;
+            continue;
+        }
+
+        if (c == 0x1b) {
+            st->esc_state = 1;
+            continue;
+        }
+        if (c == '\r') continue;
+        if (c == '\n') {
+            cli_new_line(st);
+            continue;
+        }
+        if ((c == 0x08 || c == 0x7f) && st->line_len[st->line_count - 1] > 0) {
+            int idx = st->line_count - 1;
+            st->line_len[idx]--;
+            st->lines[idx][st->line_len[idx]] = 0;
+            cli_mark_history_line_dirty(st, idx);
+            continue;
+        }
+        if (c >= 32 && c <= 126) {
+            cli_push_char(st, (char)c);
+        }
+    }
+}
+
+static unsigned int blend_color(unsigned int rgb, unsigned char alpha) {
+    unsigned int r = ((rgb >> 16) & 0xffu) * (unsigned int)alpha / 255u;
+    unsigned int g = ((rgb >> 8) & 0xffu) * (unsigned int)alpha / 255u;
+    unsigned int b = (rgb & 0xffu) * (unsigned int)alpha / 255u;
+    return (r << 16) | (g << 8) | b;
+}
+
+static int draw_glyph(cli_term_state *st, int pen_x, int baseline_y, int cp, int next_cp, unsigned int color) {
+    static unsigned char bitmap[TERM_GLYPH_BITMAP_MAX];
+    int x0, y0, x1, y1;
+    int w, h;
+    int gx, gy;
+    int advance, lsb;
+
+    if (cp < 32 || cp > 126) cp = '?';
+
+    stbtt_GetCodepointBitmapBoxSubpixel(&st->font, cp, st->scale, st->scale, 0.0f, 0.0f, &x0, &y0, &x1, &y1);
+    w = x1 - x0;
+    h = y1 - y0;
+
+    if (w > 0 && h > 0 && w * h <= TERM_GLYPH_BITMAP_MAX) {
+        ttf_reset_alloc();
+        stbtt_MakeCodepointBitmapSubpixel(&st->font, bitmap, w, h, w, st->scale, st->scale, 0.0f, 0.0f, cp);
+        for (gy = 0; gy < h; gy++) {
+            int py = baseline_y + y0 + gy;
+            if (py < 0 || py >= st->screen_h) continue;
+            for (gx = 0; gx < w; gx++) {
+                unsigned char a = bitmap[gy * w + gx];
+                int px = pen_x + x0 + gx;
+                if (a == 0 || px < 0 || px >= st->screen_w) continue;
+                xiao_video_draw_pixel_rgb888(st->env, px, py, blend_color(color, a));
+            }
+        }
+    }
+
+    stbtt_GetCodepointHMetrics(&st->font, cp, &advance, &lsb);
+    (void)lsb;
+    pen_x += (int)((float)advance * st->scale + 0.5f);
+    if (next_cp > 0) {
+        pen_x += (int)((float)stbtt_GetCodepointKernAdvance(&st->font, cp, next_cp) * st->scale + 0.5f);
+    }
+    return pen_x;
+}
+
+static int text_width_n(cli_term_state *st, const char *text, int n) {
+    int width = 0;
+    int i = 0;
+    while (text[i] && (n < 0 || i < n)) {
+        int cp = (unsigned char)text[i];
+        int next_cp = text[i + 1] ? (unsigned char)text[i + 1] : 0;
+        int adv = 0;
+        int lsb = 0;
+        stbtt_GetCodepointHMetrics(&st->font, cp, &adv, &lsb);
+        (void)lsb;
+        width += (int)((float)adv * st->scale + 0.5f);
+        if (next_cp > 0) width += (int)((float)stbtt_GetCodepointKernAdvance(&st->font, cp, next_cp) * st->scale + 0.5f);
+        i++;
+    }
+    return width;
+}
+
+static int text_width(cli_term_state *st, const char *text) {
+    return text_width_n(st, text, -1);
+}
+
+static int common_prefix_len(const char *a, const char *b) {
+    int n = 0;
+    while (a[n] && b[n] && a[n] == b[n]) n++;
+    return n;
+}
+
+static void draw_text_from_index(cli_term_state *st, int x, int y, const char *text, int start, unsigned int color) {
+    int pen_x = x;
+    int baseline = y + st->ascent_px;
+    int i = 0;
+    while (text[i]) {
+        int cp = (unsigned char)text[i];
+        int next_cp = text[i + 1] ? (unsigned char)text[i + 1] : 0;
+        if (i >= start) {
+            pen_x = draw_glyph(st, pen_x, baseline, cp, next_cp, color);
+        } else {
+            int adv = 0;
+            int lsb = 0;
+            stbtt_GetCodepointHMetrics(&st->font, cp, &adv, &lsb);
+            (void)lsb;
+            pen_x += (int)((float)adv * st->scale + 0.5f);
+            if (next_cp > 0) pen_x += (int)((float)stbtt_GetCodepointKernAdvance(&st->font, cp, next_cp) * st->scale + 0.5f);
+        }
+        if (pen_x >= st->screen_w - TERM_MARGIN) break;
+        i++;
+    }
+}
+
+static void draw_text(cli_term_state *st, int x, int y, const char *text, unsigned int color) {
+    draw_text_from_index(st, x, y, text, 0, color);
+}
+
+static int output_y_for_row(cli_term_state *st, int row) {
+    return TERM_MARGIN + row * st->line_height;
+}
+
+static int input_y(cli_term_state *st) {
+    return TERM_MARGIN + st->output_rows * st->line_height;
+}
+
+static void render_output_row(cli_term_state *st, int row) {
+    int y;
+    int h;
+    int hist_idx;
+    y = output_y_for_row(st, row);
+    h = st->line_height;
+    xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
+    hist_idx = st->view_start + row;
+    if (hist_idx >= 0 && hist_idx < st->line_count) {
+        draw_text(st, TERM_MARGIN, y, st->lines[hist_idx], TERM_TEXT_COLOR);
+    }
+}
+
+static void render_input_layer(cli_term_state *st) {
+    int y = input_y(st);
+    int h = st->line_height;
+    int prompt_x = TERM_MARGIN + (int)(st->scale * 10.0f);
+    int old_width = text_width_n(st, st->prev_input, st->prev_input_len);
+    int new_width = text_width(st, st->input);
+    int prefix = common_prefix_len(st->prev_input, st->input);
+    int redraw_from = prefix > 0 ? prefix - 1 : 0;
+    int redraw_x = prompt_x + text_width_n(st, st->input, redraw_from);
+    int clear_end = prompt_x + (old_width > new_width ? old_width : new_width) + 12;
+    int cursor_x;
+
+    if (!st->input_row_init) {
+        xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
+        draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
+        draw_text(st, prompt_x, y, st->input, TERM_INPUT_COLOR);
+        st->input_row_init = 1;
+    } else {
+        if (redraw_x < prompt_x) redraw_x = prompt_x;
+        if (clear_end < redraw_x + 12) clear_end = redraw_x + 12;
+        if (clear_end > st->screen_w) clear_end = st->screen_w;
+        xiao_video_fill_rect_rgb888(st->env, redraw_x, y, clear_end - redraw_x, h, TERM_BG_COLOR);
+        draw_text_from_index(st, prompt_x, y, st->input, redraw_from, TERM_INPUT_COLOR);
+    }
+
+    cursor_x = prompt_x + new_width;
+    xiao_video_fill_rect_rgb888(st->env, cursor_x, y + h - 4, 10, 2, TERM_CURSOR_COLOR);
+    st->cursor_prev_x = cursor_x;
+    st->prev_input_len = st->input_len;
+    {
+        int i;
+        for (i = 0; i < TERM_INPUT_MAX; i++) {
+            st->prev_input[i] = st->input[i];
+            if (st->input[i] == 0) break;
+        }
+        st->prev_input[TERM_INPUT_MAX] = 0;
+    }
+}
+
+static void cli_render_dirty(cli_term_state *st) {
+    int i;
+    for (i = 0; i < st->output_rows; i++) {
+        if (!st->dirty_rows[i]) continue;
+        render_output_row(st, i);
+        st->dirty_rows[i] = 0;
+    }
+    st->output_dirty_all = 0;
+    if (st->input_dirty) {
+        render_input_layer(st);
+        st->input_dirty = 0;
+    }
+}
+
+static void cli_init_layers(cli_term_state *st) {
+    st->output_rows = (st->screen_h - TERM_MARGIN * 2 - st->line_height) / st->line_height;
+    if (st->output_rows < 1) st->output_rows = 1;
+    if (st->output_rows > TERM_LINE_COUNT - 1) st->output_rows = TERM_LINE_COUNT - 1;
+
+    st->view_start = 0;
+    st->cursor_prev_x = -1;
+    st->output_dirty_all = 0;
+    st->input_dirty = 1;
+    st->input_row_init = 0;
+    st->prev_input_len = 0;
+    st->prev_input[0] = 0;
+    xiao_video_fill_rect_rgb888(st->env, 0, 0, st->screen_w, st->screen_h, TERM_BG_COLOR);
+    cli_mark_all_output_dirty(st);
+}
+
+static int cli_sink(void *ctx, const char *data, xiao_size len) {
+    cli_term_state *st = (cli_term_state *)ctx;
+    if (!st || !data || len == 0) return 1;
+    cli_feed_output(st, data, len);
+    cli_render_dirty(st);
+    return 1;
+}
+#endif
+
+static int run_text_terminal(xiao_env *env) {
     char line[128];
     xiao_size n = 0;
 
@@ -48,7 +572,7 @@ int xiao_app_entry(xiao_env *env) {
 
         line[n] = 0;
         if (n == 0) continue;
-        if (xiao_streq_local(line, "exit")) break;
+        if (streq(line, "exit")) break;
 
         if (xiao_exec_line(line) != 0) {
             xiao_console_print(env, "command failed: ");
@@ -59,4 +583,137 @@ int xiao_app_entry(xiao_env *env) {
 
     xiao_console_print(env, "terminal closed\r\n");
     return 0;
+}
+
+#ifdef XIAO_TTF_TERMINAL_DISABLED
+static int run_cli_terminal(xiao_env *env) {
+    xiao_console_print(env, "terminal(cli): not available on this build, falling back to text mode\r\n");
+    return run_text_terminal(env);
+}
+#else
+static int run_cli_terminal(xiao_env *env) {
+    const char *font_data = 0;
+    xiao_size font_size = 0;
+    int ascent = 0;
+    int descent = 0;
+    int line_gap = 0;
+    cli_term_state *st = &cli_state;
+
+    if (xiao_platform(env) != XIAO_PLATFORM_ESP32) {
+        xiao_video_set_mode(env, 1280, 720);
+    }
+
+    if (xiao_video_size(env, &st->screen_w, &st->screen_h) != 0) {
+        xiao_console_print(env, "terminal(cli): video is not available\r\n");
+        return 1;
+    }
+
+    if (xiao_fs_read("/IBMPlexMono-Regular.ttf", &font_data, &font_size) != 0) {
+        xiao_console_print(env, "terminal(cli): /IBMPlexMono-Regular.ttf not found\r\n");
+        return 1;
+    }
+
+    if (font_size < 1024) {
+        xiao_console_print(env, "terminal(cli): font data is invalid\r\n");
+        return 1;
+    }
+
+    st->env = env;
+    st->input_len = 0;
+    st->input[0] = 0;
+
+    if (!stbtt_InitFont(&st->font, (const unsigned char *)font_data, stbtt_GetFontOffsetForIndex((const unsigned char *)font_data, 0))) {
+        xiao_console_print(env, "terminal(cli): failed to init font\r\n");
+        return 1;
+    }
+
+    st->scale = stbtt_ScaleForPixelHeight(&st->font, TERM_FONT_PIXELS);
+    stbtt_GetFontVMetrics(&st->font, &ascent, &descent, &line_gap);
+    st->ascent_px = (int)((float)ascent * st->scale + 0.5f);
+    st->line_height = (int)(((float)(ascent - descent + line_gap)) * st->scale + 0.5f);
+    if (st->line_height < 18) st->line_height = 18;
+
+    cli_init_layers(st);
+    cli_clear_history(st);
+    cli_feed_output(st, "xiao terminal (cli ttf) ready\n", xstrlen("xiao terminal (cli ttf) ready\n"));
+    cli_feed_output(st, "type command (example: ls, cat readme.txt), or 'exit'\n", xstrlen("type command (example: ls, cat readme.txt), or 'exit'\n"));
+
+    xiao_console_set_sink(cli_sink, st);
+    cli_render_dirty(st);
+
+    while (1) {
+        int ch = xiao_input_read(env);
+        if (ch < 0) {
+            xiao_wait(env, 10);
+            continue;
+        }
+
+        if (ch == '\r' || ch == '\n') {
+            st->input[st->input_len] = 0;
+            cli_feed_output(st, "> ", 2);
+            cli_feed_output(st, st->input, xstrlen(st->input));
+            cli_feed_output(st, "\n", 1);
+
+            if (st->input_len > 0) {
+                if (streq(st->input, "exit")) break;
+                if (xiao_exec_line(st->input) != 0) {
+                    cli_feed_output(st, "command failed: ", xstrlen("command failed: "));
+                    cli_feed_output(st, st->input, xstrlen(st->input));
+                    cli_feed_output(st, "\n", 1);
+                }
+            }
+            st->input_len = 0;
+            st->input[0] = 0;
+            st->input_dirty = 1;
+            cli_render_dirty(st);
+            continue;
+        }
+
+        if ((ch == 0x08 || ch == 0x7f) && st->input_len > 0) {
+            st->input_len--;
+            st->input[st->input_len] = 0;
+            st->input_dirty = 1;
+            cli_render_dirty(st);
+            continue;
+        }
+
+        if (ch >= 32 && ch <= 126 && st->input_len < TERM_INPUT_MAX) {
+            st->input[st->input_len++] = (char)ch;
+            st->input[st->input_len] = 0;
+            st->input_dirty = 1;
+            cli_render_dirty(st);
+        }
+    }
+
+    xiao_console_set_sink(0, 0);
+    cli_feed_output(st, "terminal closed\n", xstrlen("terminal closed\n"));
+    st->input_dirty = 1;
+    cli_render_dirty(st);
+    return 0;
+}
+#endif
+
+int xiao_app_entry(xiao_env *env) {
+    int mode = xiao_mode_get();
+
+    if (xiao_argc(env) == 3 && streq(xiao_argv(env, 1), "-m")) {
+        int parsed = parse_mode_name(xiao_argv(env, 2));
+        if (parsed < 0) {
+            xiao_console_print(env, "usage: terminal [-m text|cli|gui]\r\n");
+            return 1;
+        }
+        mode = parsed;
+        xiao_mode_set(mode);
+    } else if (xiao_argc(env) != 1) {
+        xiao_console_print(env, "usage: terminal [-m text|cli|gui]\r\n");
+        return 1;
+    }
+
+    if (mode == XIAO_MODE_TEXT) return run_text_terminal(env);
+
+    if (mode == XIAO_MODE_GUI) {
+        xiao_console_print(env, "terminal: gui mode is reserved for later, using cli renderer\r\n");
+    }
+
+    return run_cli_terminal(env);
 }

@@ -20,6 +20,10 @@ typedef struct {
 #define XIAO_PLATFORM_PC 1
 #define XIAO_PLATFORM_ESP32 2
 
+#define XIAO_MODE_TEXT 0
+#define XIAO_MODE_CLI 1
+#define XIAO_MODE_GUI 2
+
 typedef struct {
     const char *name;
     xiao_app_main main;
@@ -30,6 +34,8 @@ typedef struct {
     int argc;
     const char **argv;
 } xiao_ipc_message;
+
+typedef int (*xiao_console_sink_fn)(void *ctx, const char *data, xiao_size len);
 
 typedef struct {
     void (*serial_write)(const char *data, xiao_size len);
@@ -107,6 +113,9 @@ int xiao_video_fill_rect_rgb888(xiao_env *env, int x, int y, int w, int h, unsig
 int xiao_video_size(xiao_env *env, int *w, int *h);
 int xiao_video_set_mode(xiao_env *env, int w, int h);
 int xiao_platform(xiao_env *env);
+int xiao_mode_get(void);
+int xiao_mode_set(int mode);
+void xiao_console_set_sink(xiao_console_sink_fn sink, void *ctx);
 
 extern const xiao_boot_image xiao_image;
 

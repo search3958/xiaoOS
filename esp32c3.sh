@@ -7,6 +7,25 @@ FQBN="${FQBN:-esp32:esp32:esp32s3:CDCOnBoot=cdc}"
 BAUD="${BAUD:-115200}"
 ACTION="${1:-upload-monitor}"
 
+resolve_arduino_cli() {
+    if [ -n "${ARDUINO_CLI:-}" ] && [ -x "${ARDUINO_CLI}" ]; then
+        printf '%s\n' "${ARDUINO_CLI}"
+        return 0
+    fi
+
+    if [ -x "./tools/bin/arduino-cli" ]; then
+        printf '%s\n' "./tools/bin/arduino-cli"
+        return 0
+    fi
+
+    if command -v arduino-cli >/dev/null 2>&1; then
+        command -v arduino-cli
+        return 0
+    fi
+
+    return 1
+}
+
 detect_port() {
     if [ -n "${PORT:-}" ]; then
         printf '%s\n' "$PORT"
@@ -38,40 +57,41 @@ detect_port() {
 }
 
 require_arduino_cli() {
-    if ! command -v arduino-cli >/dev/null 2>&1; then
+    if ! ARDUINO_CLI_BIN="$(resolve_arduino_cli)"; then
         echo "arduino-cli is required." >&2
-        echo "Install arduino-cli and ensure it is in PATH." >&2
-        echo "Then install ESP32 core:" >&2
-        echo "arduino-cli config init" >&2
-        echo "arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json" >&2
-        echo "arduino-cli core update-index" >&2
-        echo "arduino-cli core install esp32:esp32" >&2
+        echo "Recommended: install local binary" >&2
+        echo "mkdir -p tools/bin && curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=\"$PWD/tools/bin\" sh" >&2
         exit 127
     fi
 }
 
 require_arduino_cli
+
+if [ -n "${ARDUINO_CLI_BIN:-}" ]; then
+    "$ARDUINO_CLI_BIN" version >/dev/null 2>&1 || true
+fi
+
 python3 tools/sync_sketch.py hal/esp32c3/xiaoOS
 
 case "$ACTION" in
     compile)
-        arduino-cli compile --fqbn "$FQBN" hal/esp32c3/xiaoOS
+        "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" hal/esp32c3/xiaoOS
         ;;
     upload)
         port="$(detect_port)"
         echo "Using $port with $FQBN"
-        arduino-cli compile --fqbn "$FQBN" --upload -p "$port" hal/esp32c3/xiaoOS
+        "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --upload -p "$port" hal/esp32c3/xiaoOS
         ;;
     monitor)
         port="$(detect_port)"
         echo "Using $port at $BAUD baud"
-        arduino-cli monitor -p "$port" -c baudrate="$BAUD"
+        "$ARDUINO_CLI_BIN" monitor -p "$port" -c baudrate="$BAUD"
         ;;
     upload-monitor)
         port="$(detect_port)"
         echo "Using $port with $FQBN"
-        arduino-cli compile --fqbn "$FQBN" --upload -p "$port" hal/esp32c3/xiaoOS
-        arduino-cli monitor -p "$port" -c baudrate="$BAUD"
+        "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --upload -p "$port" hal/esp32c3/xiaoOS
+        "$ARDUINO_CLI_BIN" monitor -p "$port" -c baudrate="$BAUD"
         ;;
     *)
         echo "usage: ./esp32c3.sh [compile|upload|monitor|upload-monitor]" >&2

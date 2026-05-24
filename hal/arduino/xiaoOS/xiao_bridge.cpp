@@ -11618,7 +11618,7 @@ static int xiao_app_terminal__run_cli_terminal(xiao_env *env) {
     xiao_app_terminal__cli_init_layers(st);
     xiao_app_terminal__cli_clear_history(st);
     xiao_app_terminal__cli_feed_output(st, "BaramOS Terminal ready\n", xiao_app_terminal__xstrlen("BaramOS Terminal ready\n"));
-    xiao_app_terminal__cli_feed_output(st, "コマンドを入力して実行します。exitで終了します。\n", xiao_app_terminal__xstrlen("コマンドを入力して実行します。exitで終了します。\n"));
+    xiao_app_terminal__cli_feed_output(st, "Hello, world!\n", xiao_app_terminal__xstrlen("Hello, world!\n"));
 
     xiao_console_set_sink(xiao_app_terminal__cli_sink, st);
     xiao_app_terminal__cli_render_dirty(st);

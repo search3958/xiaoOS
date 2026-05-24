@@ -81,6 +81,12 @@ static SPIClass gc9a01_spi(HSPI);
 static SPIClass gc9a01_spi;
 #endif
 
+#define XIAO_GC9A01_WIDTH 240
+#define XIAO_GC9A01_HEIGHT 240
+
+static const SPISettings gc9a01_spi_settings(XIAO_GC9A01_SPI_HZ, MSBFIRST, SPI_MODE0);
+static uint8_t gc9a01_linebuf[XIAO_GC9A01_WIDTH * 2];
+
 typedef struct {
     uint8_t cmd;
     const uint8_t *data;
@@ -174,52 +180,83 @@ static const gc9a01_cmd gc9a01_init_cmds[] = {
     {0x99, d_99, sizeof(d_99), 0},
 };
 
-static void gc9a01_write_cmd(uint8_t cmd) {
-    gc9a01_spi.beginTransaction(SPISettings(XIAO_GC9A01_SPI_HZ, MSBFIRST, SPI_MODE0));
+static inline uint16_t gc9a01_rgb888_to_565(unsigned int rgb888) {
+    return (uint16_t)((((rgb888 >> 16) & 0xF8u) << 8) | (((rgb888 >> 8) & 0xFCu) << 3) | ((rgb888 & 0xF8u) >> 3));
+}
+
+static inline void gc9a01_tx_begin(void) {
+    gc9a01_spi.beginTransaction(gc9a01_spi_settings);
     digitalWrite(XIAO_GC9A01_PIN_CS, LOW);
-    digitalWrite(XIAO_GC9A01_PIN_DC, LOW);
-    gc9a01_spi.transfer(cmd);
+}
+
+static inline void gc9a01_tx_end(void) {
     digitalWrite(XIAO_GC9A01_PIN_CS, HIGH);
     gc9a01_spi.endTransaction();
+}
+
+static inline void gc9a01_tx_cmd(uint8_t cmd) {
+    digitalWrite(XIAO_GC9A01_PIN_DC, LOW);
+    gc9a01_spi.transfer(cmd);
+}
+
+static inline void gc9a01_tx_data(const uint8_t *data, int len) {
+    if (!data || len <= 0) return;
+    digitalWrite(XIAO_GC9A01_PIN_DC, HIGH);
+    gc9a01_spi.writeBytes(data, (uint32_t)len);
+}
+
+static void gc9a01_write_cmd(uint8_t cmd) {
+    gc9a01_tx_begin();
+    gc9a01_tx_cmd(cmd);
+    gc9a01_tx_end();
 }
 
 static void gc9a01_write_data8(uint8_t data) {
-    gc9a01_spi.beginTransaction(SPISettings(XIAO_GC9A01_SPI_HZ, MSBFIRST, SPI_MODE0));
-    digitalWrite(XIAO_GC9A01_PIN_CS, LOW);
+    gc9a01_tx_begin();
     digitalWrite(XIAO_GC9A01_PIN_DC, HIGH);
     gc9a01_spi.transfer(data);
-    digitalWrite(XIAO_GC9A01_PIN_CS, HIGH);
-    gc9a01_spi.endTransaction();
+    gc9a01_tx_end();
 }
 
 static void gc9a01_write_data16(uint16_t data) {
-    gc9a01_spi.beginTransaction(SPISettings(XIAO_GC9A01_SPI_HZ, MSBFIRST, SPI_MODE0));
-    digitalWrite(XIAO_GC9A01_PIN_CS, LOW);
-    digitalWrite(XIAO_GC9A01_PIN_DC, HIGH);
-    gc9a01_spi.transfer((uint8_t)(data >> 8));
-    gc9a01_spi.transfer((uint8_t)(data & 0xff));
-    digitalWrite(XIAO_GC9A01_PIN_CS, HIGH);
-    gc9a01_spi.endTransaction();
+    uint8_t raw[2];
+    raw[0] = (uint8_t)(data >> 8);
+    raw[1] = (uint8_t)(data & 0xff);
+    gc9a01_tx_begin();
+    gc9a01_tx_data(raw, 2);
+    gc9a01_tx_end();
 }
 
 static void gc9a01_write_data(const uint8_t *data, int len) {
-    int i;
-    gc9a01_spi.beginTransaction(SPISettings(XIAO_GC9A01_SPI_HZ, MSBFIRST, SPI_MODE0));
-    digitalWrite(XIAO_GC9A01_PIN_CS, LOW);
-    digitalWrite(XIAO_GC9A01_PIN_DC, HIGH);
-    for (i = 0; i < len; i++) gc9a01_spi.transfer(data[i]);
-    digitalWrite(XIAO_GC9A01_PIN_CS, HIGH);
-    gc9a01_spi.endTransaction();
+    gc9a01_tx_begin();
+    gc9a01_tx_data(data, len);
+    gc9a01_tx_end();
 }
 
-static void gc9a01_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-    gc9a01_write_cmd(0x2A);
-    gc9a01_write_data16(x0);
-    gc9a01_write_data16(x1);
-    gc9a01_write_cmd(0x2B);
-    gc9a01_write_data16(y0);
-    gc9a01_write_data16(y1);
-    gc9a01_write_cmd(0x2C);
+static void gc9a01_begin_pixels(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
+    uint8_t raw[4];
+    gc9a01_tx_begin();
+
+    gc9a01_tx_cmd(0x2A);
+    raw[0] = (uint8_t)(x0 >> 8);
+    raw[1] = (uint8_t)(x0 & 0xff);
+    raw[2] = (uint8_t)(x1 >> 8);
+    raw[3] = (uint8_t)(x1 & 0xff);
+    gc9a01_tx_data(raw, 4);
+
+    gc9a01_tx_cmd(0x2B);
+    raw[0] = (uint8_t)(y0 >> 8);
+    raw[1] = (uint8_t)(y0 & 0xff);
+    raw[2] = (uint8_t)(y1 >> 8);
+    raw[3] = (uint8_t)(y1 & 0xff);
+    gc9a01_tx_data(raw, 4);
+
+    gc9a01_tx_cmd(0x2C);
+    digitalWrite(XIAO_GC9A01_PIN_DC, HIGH);
+}
+
+static void gc9a01_end_pixels(void) {
+    gc9a01_tx_end();
 }
 
 static void gc9a01_init(void) {
@@ -267,70 +304,124 @@ static void gc9a01_init(void) {
 }
 
 static int esp32c3_video_fill_rgb888(unsigned int rgb888) {
-    uint8_t r = (uint8_t)((rgb888 >> 16) & 0xff);
-    uint8_t g = (uint8_t)((rgb888 >> 8) & 0xff);
-    uint8_t b = (uint8_t)(rgb888 & 0xff);
-    uint16_t c565 = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+    uint16_t c565 = gc9a01_rgb888_to_565(rgb888);
     uint8_t hi = (uint8_t)(c565 >> 8);
     uint8_t lo = (uint8_t)(c565 & 0xff);
-    int i;
+    int x;
+    int y;
 
     gc9a01_init();
-    gc9a01_set_window(0, 0, 239, 239);
-    gc9a01_spi.beginTransaction(SPISettings(XIAO_GC9A01_SPI_HZ, MSBFIRST, SPI_MODE0));
-    digitalWrite(XIAO_GC9A01_PIN_CS, LOW);
-    digitalWrite(XIAO_GC9A01_PIN_DC, HIGH);
-    for (i = 0; i < 240 * 240; i++) {
-        gc9a01_spi.transfer(hi);
-        gc9a01_spi.transfer(lo);
+
+    for (x = 0; x < XIAO_GC9A01_WIDTH; x++) {
+        gc9a01_linebuf[x * 2] = hi;
+        gc9a01_linebuf[x * 2 + 1] = lo;
     }
-    digitalWrite(XIAO_GC9A01_PIN_CS, HIGH);
-    gc9a01_spi.endTransaction();
+
+    gc9a01_begin_pixels(0, 0, XIAO_GC9A01_WIDTH - 1, XIAO_GC9A01_HEIGHT - 1);
+    for (y = 0; y < XIAO_GC9A01_HEIGHT; y++) {
+        gc9a01_spi.writeBytes(gc9a01_linebuf, XIAO_GC9A01_WIDTH * 2);
+    }
+    gc9a01_end_pixels();
+
     return 0;
 }
 
 static int esp32c3_video_draw_pixel_rgb888(int x, int y, unsigned int rgb888) {
-    uint8_t r = (uint8_t)((rgb888 >> 16) & 0xff);
-    uint8_t g = (uint8_t)((rgb888 >> 8) & 0xff);
-    uint8_t b = (uint8_t)(rgb888 & 0xff);
-    uint16_t c565 = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
-    if (x < 0 || y < 0 || x >= 240 || y >= 240) return -1;
+    uint16_t c565;
+    uint8_t raw[2];
+
+    if (x < 0 || y < 0 || x >= XIAO_GC9A01_WIDTH || y >= XIAO_GC9A01_HEIGHT) return -1;
+
+    c565 = gc9a01_rgb888_to_565(rgb888);
+    raw[0] = (uint8_t)(c565 >> 8);
+    raw[1] = (uint8_t)(c565 & 0xff);
+
     gc9a01_init();
-    gc9a01_set_window((uint16_t)x, (uint16_t)y, (uint16_t)x, (uint16_t)y);
-    gc9a01_write_data16(c565);
+    gc9a01_begin_pixels((uint16_t)x, (uint16_t)y, (uint16_t)x, (uint16_t)y);
+    gc9a01_spi.writeBytes(raw, 2);
+    gc9a01_end_pixels();
     return 0;
 }
 
 static int esp32c3_video_fill_rect_rgb888(int x, int y, int w, int h, unsigned int rgb888) {
-    uint8_t r = (uint8_t)((rgb888 >> 16) & 0xff);
-    uint8_t g = (uint8_t)((rgb888 >> 8) & 0xff);
-    uint8_t b = (uint8_t)(rgb888 & 0xff);
-    uint16_t c565 = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+    uint16_t c565 = gc9a01_rgb888_to_565(rgb888);
     uint8_t hi = (uint8_t)(c565 >> 8);
     uint8_t lo = (uint8_t)(c565 & 0xff);
-    int x0, y0, x1, y1;
-    int pixels;
-    int i;
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    int cw;
+    int ch;
+    int row;
+    int col;
+
     if (w <= 0 || h <= 0) return -1;
+
     x0 = x < 0 ? 0 : x;
     y0 = y < 0 ? 0 : y;
     x1 = x + w;
     y1 = y + h;
-    if (x1 > 240) x1 = 240;
-    if (y1 > 240) y1 = 240;
+    if (x1 > XIAO_GC9A01_WIDTH) x1 = XIAO_GC9A01_WIDTH;
+    if (y1 > XIAO_GC9A01_HEIGHT) y1 = XIAO_GC9A01_HEIGHT;
     if (x0 >= x1 || y0 >= y1) return -1;
-    gc9a01_init();
-    gc9a01_set_window((uint16_t)x0, (uint16_t)y0, (uint16_t)(x1 - 1), (uint16_t)(y1 - 1));
-    pixels = (x1 - x0) * (y1 - y0);
-    gc9a01_spi.beginTransaction(SPISettings(XIAO_GC9A01_SPI_HZ, MSBFIRST, SPI_MODE0));
-    digitalWrite(XIAO_GC9A01_PIN_CS, LOW);
-    digitalWrite(XIAO_GC9A01_PIN_DC, HIGH);
-    for (i = 0; i < pixels; i++) {
-        gc9a01_spi.transfer(hi);
-        gc9a01_spi.transfer(lo);
+
+    cw = x1 - x0;
+    ch = y1 - y0;
+
+    for (col = 0; col < cw; col++) {
+        gc9a01_linebuf[col * 2] = hi;
+        gc9a01_linebuf[col * 2 + 1] = lo;
     }
-    digitalWrite(XIAO_GC9A01_PIN_CS, HIGH);
-    gc9a01_spi.endTransaction();
+
+    gc9a01_init();
+    gc9a01_begin_pixels((uint16_t)x0, (uint16_t)y0, (uint16_t)(x1 - 1), (uint16_t)(y1 - 1));
+    for (row = 0; row < ch; row++) {
+        gc9a01_spi.writeBytes(gc9a01_linebuf, cw * 2);
+    }
+    gc9a01_end_pixels();
+
+    return 0;
+}
+
+static int esp32c3_video_blit_rgb888(int x, int y, int w, int h, const unsigned int *pixels, int stride) {
+    int src_x0 = 0;
+    int src_y0 = 0;
+    int row;
+    int col;
+
+    if (!pixels || w <= 0 || h <= 0 || stride < w) return -1;
+
+    if (x < 0) {
+        src_x0 = -x;
+        w += x;
+        x = 0;
+    }
+    if (y < 0) {
+        src_y0 = -y;
+        h += y;
+        y = 0;
+    }
+    if (x >= XIAO_GC9A01_WIDTH || y >= XIAO_GC9A01_HEIGHT) return -1;
+
+    if (x + w > XIAO_GC9A01_WIDTH) w = XIAO_GC9A01_WIDTH - x;
+    if (y + h > XIAO_GC9A01_HEIGHT) h = XIAO_GC9A01_HEIGHT - y;
+    if (w <= 0 || h <= 0) return -1;
+
+    gc9a01_init();
+    gc9a01_begin_pixels((uint16_t)x, (uint16_t)y, (uint16_t)(x + w - 1), (uint16_t)(y + h - 1));
+
+    for (row = 0; row < h; row++) {
+        const unsigned int *src = pixels + (src_y0 + row) * stride + src_x0;
+        for (col = 0; col < w; col++) {
+            uint16_t c565 = gc9a01_rgb888_to_565(src[col]);
+            gc9a01_linebuf[col * 2] = (uint8_t)(c565 >> 8);
+            gc9a01_linebuf[col * 2 + 1] = (uint8_t)(c565 & 0xff);
+        }
+        gc9a01_spi.writeBytes(gc9a01_linebuf, w * 2);
+    }
+
+    gc9a01_end_pixels();
     return 0;
 }
 
@@ -359,6 +450,7 @@ static const xiao_hal esp32c3_hal = {
     esp32c3_video_size,
     esp32c3_video_set_mode,
     XIAO_PLATFORM_ESP32,
+    esp32c3_video_blit_rgb888,
 };
 
 void setup() {

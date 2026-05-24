@@ -892,7 +892,7 @@ static int run_cli_terminal(xiao_env *env) {
     cli_init_layers(st);
     cli_clear_history(st);
     cli_feed_output(st, "BaramOS Terminal ready\n", xstrlen("BaramOS Terminal ready\n"));
-    cli_feed_output(st, "コマンドを入力して実行します。exitで終了します。\n", xstrlen("コマンドを入力して実行します。exitで終了します。\n"));
+    cli_feed_output(st, "Hello, world!\n", xstrlen("Hello, world!\n"));
 
     xiao_console_set_sink(cli_sink, st);
     cli_render_dirty(st);

@@ -347,6 +347,97 @@ static int uefi_video_fill_rect_rgb888(int x, int y, int w, int h, unsigned int 
     return 0;
 }
 
+#define UEFI_BLT_ROW_MAX 4096
+
+static int uefi_video_blit_rgb888(int x, int y, int w, int h, const unsigned int *pixels, int stride) {
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
+    volatile UINT32 *fb;
+    int x0, y0, x1, y1;
+    int sx0, sy0;
+    int rw, rh;
+    int yy, xx;
+
+    if (!pixels || w <= 0 || h <= 0 || stride < w) return -1;
+    if (uefi_prepare_gop() != 0) return -1;
+
+    mode = gop->Mode;
+    info = mode->Info;
+    x0 = x < 0 ? 0 : x;
+    y0 = y < 0 ? 0 : y;
+    x1 = x + w;
+    y1 = y + h;
+    if (x1 > (int)info->HorizontalResolution) x1 = (int)info->HorizontalResolution;
+    if (y1 > (int)info->VerticalResolution) y1 = (int)info->VerticalResolution;
+    if (x0 >= x1 || y0 >= y1) return -1;
+
+    sx0 = x0 - x;
+    sy0 = y0 - y;
+    rw = x1 - x0;
+    rh = y1 - y0;
+
+    if (info->PixelFormat == PixelBltOnly) {
+        static EFI_GRAPHICS_OUTPUT_BLT_PIXEL blt_row[UEFI_BLT_ROW_MAX];
+        if (!gop->Blt || rw > UEFI_BLT_ROW_MAX) return -1;
+
+        for (yy = 0; yy < rh; yy++) {
+            const unsigned int *src = pixels + (sy0 + yy) * stride + sx0;
+            for (xx = 0; xx < rw; xx++) {
+                unsigned int rgb = src[xx];
+                blt_row[xx].Red = (u8)((rgb >> 16) & 0xff);
+                blt_row[xx].Green = (u8)((rgb >> 8) & 0xff);
+                blt_row[xx].Blue = (u8)(rgb & 0xff);
+                blt_row[xx].Reserved = 0;
+            }
+            if (gop->Blt(gop, blt_row, EfiBltBufferToVideo, 0, 0, (UINTN)x0, (UINTN)(y0 + yy), (UINTN)rw, 1, 0) != EFI_SUCCESS) {
+                return -1;
+            }
+        }
+        return 0;
+    }
+
+    fb = (volatile UINT32 *)(UINTN)mode->FrameBufferBase;
+    if (!fb) return -1;
+
+    if (info->PixelFormat == PixelBlueGreenRedReserved8BitPerColor) {
+        for (yy = 0; yy < rh; yy++) {
+            const unsigned int *src = pixels + (sy0 + yy) * stride + sx0;
+            UINTN row = (UINTN)(y0 + yy) * (UINTN)info->PixelsPerScanLine + (UINTN)x0;
+            for (xx = 0; xx < rw; xx++) {
+                fb[row + (UINTN)xx] = (UINT32)src[xx];
+            }
+        }
+        return 0;
+    }
+
+    if (info->PixelFormat == PixelRedGreenBlueReserved8BitPerColor) {
+        for (yy = 0; yy < rh; yy++) {
+            const unsigned int *src = pixels + (sy0 + yy) * stride + sx0;
+            UINTN row = (UINTN)(y0 + yy) * (UINTN)info->PixelsPerScanLine + (UINTN)x0;
+            for (xx = 0; xx < rw; xx++) {
+                unsigned int rgb = src[xx];
+                fb[row + (UINTN)xx] = (UINT32)(((rgb & 0x000000ffu) << 16) | (rgb & 0x0000ff00u) | ((rgb & 0x00ff0000u) >> 16));
+            }
+        }
+        return 0;
+    }
+
+    if (info->PixelFormat == PixelBitMask) {
+        for (yy = 0; yy < rh; yy++) {
+            const unsigned int *src = pixels + (sy0 + yy) * stride + sx0;
+            UINTN row = (UINTN)(y0 + yy) * (UINTN)info->PixelsPerScanLine + (UINTN)x0;
+            for (xx = 0; xx < rw; xx++) {
+                UINT32 color;
+                if (uefi_color_from_rgb888(info, src[xx], &color) != 0) return -1;
+                fb[row + (UINTN)xx] = color;
+            }
+        }
+        return 0;
+    }
+
+    return -1;
+}
+
 static int uefi_video_fill_rgb888(unsigned int rgb888) {
     int w, h;
     if (uefi_video_size(&w, &h) != 0) return -1;
@@ -365,6 +456,7 @@ static const xiao_hal uefi_hal = {
     uefi_video_size,
     uefi_video_set_mode,
     XIAO_PLATFORM_PC,
+    uefi_video_blit_rgb888,
 };
 
 int xiao_uefi_reboot(void) {

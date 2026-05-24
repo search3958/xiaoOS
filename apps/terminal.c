@@ -528,8 +528,23 @@ static int term_advance_px(cli_term_state *st, int cp, int next_cp) {
     return -(((-px_fp) + (TERM_FP_ONE >> 1)) >> TERM_FP_SHIFT);
 }
 
+static int term_blend_rgb888(unsigned int bg, unsigned int fg, unsigned char a) {
+    unsigned int ia = (unsigned int)(255 - a);
+    unsigned int br = (bg >> 16) & 0xffu;
+    unsigned int bgc = (bg >> 8) & 0xffu;
+    unsigned int bb = bg & 0xffu;
+    unsigned int fr = (fg >> 16) & 0xffu;
+    unsigned int fgc = (fg >> 8) & 0xffu;
+    unsigned int fb = fg & 0xffu;
+    unsigned int r = (fr * (unsigned int)a + br * ia) / 255u;
+    unsigned int g = (fgc * (unsigned int)a + bgc * ia) / 255u;
+    unsigned int b = (fb * (unsigned int)a + bb * ia) / 255u;
+    return (r << 16) | (g << 8) | b;
+}
+
 static int draw_glyph(cli_term_state *st, int pen_x, int baseline_y, int cp, int next_cp, unsigned int color) {
     static unsigned char bitmap[TERM_GLYPH_BITMAP_MAX];
+    static unsigned int rgbbuf[TERM_GLYPH_BITMAP_MAX];
     const term_color_lut *lut = term_pick_lut(st, color);
     int x0, y0, x1, y1;
     int w, h;
@@ -544,51 +559,24 @@ static int draw_glyph(cli_term_state *st, int pen_x, int baseline_y, int cp, int
     if (w > 0 && h > 0 && w * h <= TERM_GLYPH_BITMAP_MAX) {
         ttf_reset_alloc();
         stbtt_MakeCodepointBitmapSubpixel(&st->font, bitmap, w, h, w, st->scale, st->scale, 0.0f, 0.0f, cp);
+
         for (gy = 0; gy < h; gy++) {
-            int py = baseline_y + y0 + gy;
-            if (py < 0 || py >= st->screen_h) continue;
-            gx = 0;
-            while (gx < w) {
+            for (gx = 0; gx < w; gx++) {
                 unsigned char a = bitmap[gy * w + gx];
-                int px = pen_x + x0 + gx;
-                if (a == 0 || px >= st->screen_w) {
-                    gx++;
-                    continue;
-                }
-                if (px < 0) {
-                    gx++;
-                    continue;
-                }
-                if (a == 255) {
-                    int run = gx + 1;
-                    while (run < w && bitmap[gy * w + run] == 255) run++;
-                    {
-                        int run_px = pen_x + x0 + gx;
-                        int run_w = run - gx;
-                        if (run_px < 0) {
-                            run_w += run_px;
-                            run_px = 0;
-                        }
-                        if (run_px + run_w > st->screen_w) run_w = st->screen_w - run_px;
-                        if (run_w > 0) xiao_video_fill_rect_rgb888(st->env, run_px, py, run_w, 1, color);
-                    }
-                    gx = run;
-                    continue;
-                }
                 if (lut) {
-                    xiao_video_draw_pixel_rgb888(st->env, px, py, lut->table[a]);
+                    rgbbuf[gy * w + gx] = lut->table[a];
                 } else {
-                    xiao_video_draw_pixel_rgb888(st->env, px, py, color);
+                    rgbbuf[gy * w + gx] = term_blend_rgb888(TERM_BG_COLOR, color, a);
                 }
-                gx++;
             }
         }
+
+        xiao_video_blit_rgb888(st->env, pen_x + x0, baseline_y + y0, w, h, rgbbuf, w);
     }
 
     pen_x += term_advance_px(st, cp, next_cp);
     return pen_x;
 }
-
 static int text_width_n(cli_term_state *st, const char *text, int n) {
     int width = 0;
     int i = 0;

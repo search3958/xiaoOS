@@ -787,6 +787,21 @@ int xiao_video_set_mode(xiao_env *env, int w, int h) {
     return -1;
 }
 
+int xiao_video_blit_rgb888(xiao_env *env, int x, int y, int w, int h, const unsigned int *pixels, int stride) {
+    int iy;
+    int ix;
+    if (!pixels || w <= 0 || h <= 0 || stride < w) return -1;
+    if (env && env->hal && env->hal->video_blit_rgb888) {
+        return env->hal->video_blit_rgb888(x, y, w, h, pixels, stride);
+    }
+    for (iy = 0; iy < h; iy++) {
+        for (ix = 0; ix < w; ix++) {
+            if (xiao_video_draw_pixel_rgb888(env, x + ix, y + iy, pixels[iy * stride + ix]) != 0) return -1;
+        }
+    }
+    return 0;
+}
+
 int xiao_platform(xiao_env *env) {
     if (env && env->hal) return env->hal->platform;
     return XIAO_PLATFORM_UNKNOWN;

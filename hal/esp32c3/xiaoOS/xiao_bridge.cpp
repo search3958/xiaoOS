@@ -9498,7 +9498,7 @@ const xiao_boot_image xiao_image = {
     sizeof(file_table) / sizeof(file_table[0]),
 };
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/cat.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/cat.c"
 #include "xiao.h"
 
 static void xiao_app_cat__usage(xiao_env *env) {
@@ -9561,7 +9561,7 @@ int xiao_app_cat(xiao_env *env) {
     return 0;
 }
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/cd.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/cd.c"
 #include "xiao.h"
 
 int xiao_app_cd(xiao_env *env) {
@@ -9577,7 +9577,7 @@ int xiao_app_cd(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/clear.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/clear.c"
 #include "xiao.h"
 
 int xiao_app_clear(xiao_env *env) {
@@ -9586,7 +9586,7 @@ int xiao_app_clear(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/cp.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/cp.c"
 #include "xiao.h"
 
 int xiao_app_cp(xiao_env *env) {
@@ -9602,7 +9602,7 @@ int xiao_app_cp(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/date.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/date.c"
 #include "xiao.h"
 
 int xiao_app_date(xiao_env *env) {
@@ -9612,7 +9612,7 @@ int xiao_app_date(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/df.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/df.c"
 #include "xiao.h"
 
 static void xiao_app_df__print_uint(xiao_env *env, xiao_size value) {
@@ -9657,7 +9657,7 @@ int xiao_app_df(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/echo.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/echo.c"
 #include "xiao.h"
 
 int xiao_app_echo(xiao_env *env) {
@@ -9671,7 +9671,7 @@ int xiao_app_echo(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/find.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/find.c"
 #include "xiao.h"
 
 #define MAX_PATH 64
@@ -9737,7 +9737,7 @@ int xiao_app_find(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/free.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/free.c"
 #include "xiao.h"
 
 static void xiao_app_free__print_uint(xiao_env *env, xiao_size value) {
@@ -9781,7 +9781,7 @@ int xiao_app_free(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/grap.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/grap.c"
 #include "xiao.h"
 
 static int xiao_app_grap__streq(const char *a, const char *b) {
@@ -9874,7 +9874,7 @@ int xiao_app_grap(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/grep.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/grep.c"
 #include "xiao.h"
 
 static int xiao_app_grep__contains(const char *data, xiao_size len, const char *needle) {
@@ -9930,7 +9930,7 @@ int xiao_app_grep(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/halt.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/halt.c"
 #include "xiao.h"
 
 int xiao_app_halt(xiao_env *env) {
@@ -9939,7 +9939,7 @@ int xiao_app_halt(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/head.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/head.c"
 #include "xiao.h"
 
 // 文字列比較用の補助関数
@@ -10073,7 +10073,7 @@ int xiao_app_head(xiao_env *env) {
     return 0;
 }
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/hello.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/hello.c"
 #include "xiao.h"
 
 int xiao_app_hello(xiao_env *env) {
@@ -10082,7 +10082,7 @@ int xiao_app_hello(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/help.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/help.c"
 #include "xiao.h"
 
 int xiao_app_help(xiao_env *env) {
@@ -10099,7 +10099,7 @@ int xiao_app_help(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/less.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/less.c"
 #include "xiao.h"
 
 #define PAGE_LINES 23
@@ -10190,7 +10190,7 @@ int xiao_app_less(xiao_env *env) {
     return 0;
 }
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/ls.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/ls.c"
 #include "xiao.h"
 
 int xiao_app_ls(xiao_env *env) {
@@ -10226,7 +10226,7 @@ int xiao_app_ls(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/mkdir.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/mkdir.c"
 #include "xiao.h"
 
 int xiao_app_mkdir(xiao_env *env) {
@@ -10247,7 +10247,7 @@ int xiao_app_mkdir(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/mode.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/mode.c"
 #include "xiao.h"
 
 static int xiao_app_mode__streq(const char *a, const char *b) {
@@ -10298,20 +10298,11 @@ int xiao_app_mode(xiao_env *env) {
     xiao_console_print(env, "mode switched to ");
     xiao_console_print(env, mode_name(mode));
     xiao_console_print(env, "\r\n");
-
-    {
-        const char *argv_text[] = { "terminal", "-m", "text" };
-        const char *argv_cli[] = { "terminal", "-m", "cli" };
-        const char *argv_gui[] = { "terminal", "-m", "gui" };
-
-        if (mode == XIAO_MODE_TEXT) return xiao_exec_app_args("terminal", 3, argv_text);
-        if (mode == XIAO_MODE_CLI) return xiao_exec_app_args("terminal", 3, argv_cli);
-        return xiao_exec_app_args("terminal", 3, argv_gui);
-    }
+    return 0;
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/mv.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/mv.c"
 #include "xiao.h"
 
 int xiao_app_mv(xiao_env *env) {
@@ -10327,7 +10318,7 @@ int xiao_app_mv(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/poweroff.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/poweroff.c"
 #include "xiao.h"
 
 int xiao_app_poweroff(xiao_env *env) {
@@ -10336,7 +10327,7 @@ int xiao_app_poweroff(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/ps.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/ps.c"
 #include "xiao.h"
 
 static void xiao_app_ps__print_uint(xiao_env *env, xiao_size v) {
@@ -10373,7 +10364,7 @@ int xiao_app_ps(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/pwd.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/pwd.c"
 #include "xiao.h"
 
 int xiao_app_pwd(xiao_env *env) {
@@ -10383,7 +10374,7 @@ int xiao_app_pwd(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/reboot.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/reboot.c"
 #include "xiao.h"
 
 int xiao_app_reboot(xiao_env *env) {
@@ -10392,7 +10383,7 @@ int xiao_app_reboot(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/red.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/red.c"
 #include "xiao.h"
 
 int xiao_app_red(xiao_env *env) {
@@ -10421,7 +10412,7 @@ int xiao_app_red(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/rm.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/rm.c"
 #include "xiao.h"
 
 int xiao_app_rm(xiao_env *env) {
@@ -10442,7 +10433,7 @@ int xiao_app_rm(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/sed.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/sed.c"
 #include "xiao.h"
 
 static xiao_size xiao_app_sed__strlen_local(const char *s) {
@@ -10532,7 +10523,7 @@ int xiao_app_sed(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/serial_hello.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/serial_hello.c"
 #include "xiao.h"
 
 int xiao_app_serial_hello(xiao_env *env) {
@@ -10541,7 +10532,7 @@ int xiao_app_serial_hello(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/shutdown.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/shutdown.c"
 #include "xiao.h"
 
 int xiao_app_shutdown(xiao_env *env) {
@@ -10550,7 +10541,7 @@ int xiao_app_shutdown(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/sleep.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/sleep.c"
 #include "xiao.h"
 
 static unsigned long xiao_app_sleep__parse_uint(const char *s, int *ok) {
@@ -10589,7 +10580,7 @@ int xiao_app_sleep(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/sort.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/sort.c"
 #include "xiao.h"
 
 #define MAX_LINES 32
@@ -10662,7 +10653,7 @@ int xiao_app_sort(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/tail.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/tail.c"
 #include "xiao.h"
 
 static int xiao_app_tail__streq(const char *a, const char *b) {
@@ -10737,7 +10728,7 @@ int xiao_app_tail(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/terminal.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/terminal.c"
 #include "xiao.h"
 #include <stddef.h>
 
@@ -10756,12 +10747,14 @@ extern "C" void esp_restart(void);
 #define TERM_PROMPT_COLOR 0x8FA4BAu
 #define TERM_INPUT_COLOR 0xFFCB52u
 #define TERM_CURSOR_COLOR 0xE8EEF6u
+#define TERM_PROMPT_STR "> "
 #define TTF_ARENA_SIZE (128 * 1024)
 #define TERM_FP_SHIFT 16
 #define TERM_FP_ONE (1 << TERM_FP_SHIFT)
 
 enum {
     TERM_ACTION_NONE = 0,
+    TERM_ACTION_MODE_SWITCH = 1,
     TERM_ACTION_REBOOT = 2,
     TERM_ACTION_SHUTDOWN = 3
 };
@@ -11084,14 +11077,24 @@ static void xiao_app_terminal__cli_mark_history_line_dirty(cli_term_state *st, i
     xiao_app_terminal__cli_mark_output_row_dirty(st, row);
 }
 
+static int xiao_app_terminal__cli_input_logical_index(cli_term_state *st) {
+    int last;
+    int slot;
+    if (!st || st->line_count <= 0) return 0;
+    last = st->line_count - 1;
+    slot = xiao_app_terminal__term_line_slot(st, last);
+    if (st->line_len[slot] == 0) return last;
+    return st->line_count;
+}
+
 static void xiao_app_terminal__cli_mark_input_line_dirty(cli_term_state *st) {
-    int row = st->line_count - st->view_start;
+    int row = xiao_app_terminal__cli_input_logical_index(st) - st->view_start;
     xiao_app_terminal__cli_mark_output_row_dirty(st, row);
 }
 
 static int xiao_app_terminal__cli_sync_view(cli_term_state *st) {
     int old = st->view_start;
-    int total_lines = st->line_count + 1;
+    int total_lines = xiao_app_terminal__cli_input_logical_index(st) + 1;
     int max_start = total_lines - st->output_rows;
     if (max_start < 0) max_start = 0;
     st->view_start = max_start;
@@ -11378,10 +11381,12 @@ static void xiao_app_terminal__render_output_row(cli_term_state *st, int row) {
     int y;
     int h;
     int idx;
+    int input_idx;
     y = xiao_app_terminal__output_y_for_row(st, row);
     h = st->line_height;
     idx = st->view_start + row;
-    if (idx >= 0 && idx < st->line_count) {
+    input_idx = xiao_app_terminal__cli_input_logical_index(st);
+    if (idx >= 0 && idx < st->line_count && idx != input_idx) {
         int slot = xiao_app_terminal__term_line_slot(st, idx);
         int new_len = st->line_len[slot];
         int old_len = st->row_cache_len[row];
@@ -11414,8 +11419,8 @@ static void xiao_app_terminal__render_output_row(cli_term_state *st, int row) {
         xiao_app_terminal__term_copy_cstr_cap(st->row_cache_text[row], TERM_LINE_MAX, st->lines[slot], &st->row_cache_len[row]);
         return;
     }
-    if (idx == st->line_count) {
-        int prompt_x = TERM_MARGIN + xiao_app_terminal__text_width_n(st, ">", -1);
+    if (idx == input_idx) {
+        int prompt_x = TERM_MARGIN + xiao_app_terminal__text_width_n(st, TERM_PROMPT_STR, -1);
         int old_width = xiao_app_terminal__text_width_n(st, st->row_cache_text[row], st->row_cache_len[row]);
         int new_width = xiao_app_terminal__text_width(st, st->input);
         int prefix = st->row_cache_kind[row] == TERM_ROW_KIND_INPUT ? xiao_app_terminal__common_prefix_len(st->row_cache_text[row], st->input) : 0;
@@ -11431,7 +11436,7 @@ static void xiao_app_terminal__render_output_row(cli_term_state *st, int row) {
 
         if (!st->input_row_init || st->row_cache_kind[row] != TERM_ROW_KIND_INPUT) {
             xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
-            xiao_app_terminal__draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
+            xiao_app_terminal__draw_text(st, TERM_MARGIN, y, TERM_PROMPT_STR, TERM_PROMPT_COLOR);
             xiao_app_terminal__draw_text(st, prompt_x, y, st->input, TERM_INPUT_COLOR);
             st->input_row_init = 1;
         } else {
@@ -11439,12 +11444,18 @@ static void xiao_app_terminal__render_output_row(cli_term_state *st, int row) {
             if (clear_end < redraw_x + 12) clear_end = redraw_x + 12;
             if (clear_end > st->screen_w) clear_end = st->screen_w;
             xiao_video_fill_rect_rgb888(st->env, redraw_x, y, clear_end - redraw_x, h, TERM_BG_COLOR);
-            xiao_app_terminal__draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
+            xiao_app_terminal__draw_text(st, TERM_MARGIN, y, TERM_PROMPT_STR, TERM_PROMPT_COLOR);
             xiao_app_terminal__draw_text_from_index(st, prompt_x, y, st->input, redraw_from, TERM_INPUT_COLOR);
         }
 
         cursor_x = prompt_x + new_width;
-        xiao_video_fill_rect_rgb888(st->env, cursor_x, y + h - 4, 10, 2, TERM_CURSOR_COLOR);
+        {
+            int cursor_y = y + 3;
+            int cursor_h = h - 6;
+            if (cursor_h < 10) cursor_h = 10;
+            if (cursor_y + cursor_h > st->screen_h) cursor_h = st->screen_h - cursor_y;
+            if (cursor_h > 0) xiao_video_fill_rect_rgb888(st->env, cursor_x, cursor_y, 2, cursor_h, TERM_CURSOR_COLOR);
+        }
         st->cursor_prev_x = cursor_x;
         st->prev_input_len = st->input_len;
         xiao_app_terminal__term_copy_cstr_cap(st->prev_input, TERM_INPUT_MAX + 1, st->input, 0);
@@ -11513,6 +11524,7 @@ static int xiao_app_terminal__run_text_terminal(xiao_env *env) {
     char line[128];
     xiao_size n = 0;
     int action = TERM_ACTION_NONE;
+    int run_mode = xiao_mode_get();
 
     xiao_console_print(env, "xiao terminal ready\r\n");
     xiao_console_print(env, "type command (example: ls, cat readme.txt), or 'exit'\r\n");
@@ -11559,6 +11571,10 @@ static int xiao_app_terminal__run_text_terminal(xiao_env *env) {
             xiao_console_print(env, line);
             xiao_console_print(env, "\r\n");
         }
+
+        if (xiao_mode_get() != run_mode) {
+            return TERM_ACTION_MODE_SWITCH;
+        }
     }
 
     xiao_console_print(env, "terminal closed\r\n");
@@ -11578,6 +11594,7 @@ static int xiao_app_terminal__run_cli_terminal(xiao_env *env) {
     int descent = 0;
     int line_gap = 0;
     int action = TERM_ACTION_NONE;
+    int run_mode = xiao_mode_get();
     cli_term_state *st = &cli_state;
 
     if (xiao_platform(env) != XIAO_PLATFORM_ESP32) {
@@ -11632,7 +11649,7 @@ static int xiao_app_terminal__run_cli_terminal(xiao_env *env) {
 
         if (ch == '\r' || ch == '\n') {
             st->input[st->input_len] = 0;
-            xiao_app_terminal__cli_feed_output(st, "> ", 2);
+            xiao_app_terminal__cli_feed_output(st, TERM_PROMPT_STR, xiao_app_terminal__xstrlen(TERM_PROMPT_STR));
             xiao_app_terminal__cli_feed_output(st, st->input, xiao_app_terminal__xstrlen(st->input));
             xiao_app_terminal__cli_feed_output(st, "\n", 1);
 
@@ -11646,6 +11663,12 @@ static int xiao_app_terminal__run_cli_terminal(xiao_env *env) {
                     xiao_app_terminal__cli_feed_output(st, "\n", 1);
                 }
             }
+
+            if (xiao_mode_get() != run_mode) {
+                action = TERM_ACTION_MODE_SWITCH;
+                break;
+            }
+
             st->input_len = 0;
             st->input[0] = 0;
             st->input_dirty = 1;
@@ -11697,6 +11720,7 @@ int xiao_app_terminal(xiao_env *env) {
 
     while (1) {
         int rc;
+        mode = xiao_mode_get();
         if (mode == XIAO_MODE_TEXT) {
             rc = xiao_app_terminal__run_text_terminal(env);
         } else {
@@ -11705,6 +11729,15 @@ int xiao_app_terminal(xiao_env *env) {
                 warned_gui = 1;
             }
             rc = xiao_app_terminal__run_cli_terminal(env);
+        }
+
+        if (rc == TERM_ACTION_MODE_SWITCH) {
+            if (xiao_mode_get() == XIAO_MODE_TEXT) {
+                xiao_console_print(env, "\x1b[2J\x1b[H");
+            } else {
+                xiao_video_fill_rgb888(env, TERM_BG_COLOR);
+            }
+            continue;
         }
 
         if (rc == TERM_ACTION_REBOOT) {
@@ -11735,7 +11768,7 @@ int xiao_app_terminal(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/top.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/top.c"
 #include "xiao.h"
 
 static void xiao_app_top__print_uint(xiao_env *env, xiao_size value) {
@@ -11784,7 +11817,7 @@ int xiao_app_top(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/touch.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/touch.c"
 #include "xiao.h"
 
 int xiao_app_touch(xiao_env *env) {
@@ -11817,7 +11850,7 @@ int xiao_app_touch(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/uname.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/uname.c"
 #include "xiao.h"
 
 int xiao_app_uname(xiao_env *env) {
@@ -11826,7 +11859,7 @@ int xiao_app_uname(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/uniq.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/uniq.c"
 #include "xiao.h"
 
 #define MAX_LINE 128
@@ -11881,7 +11914,7 @@ int xiao_app_uniq(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/wc.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/wc.c"
 #include "xiao.h"
 
 static void xiao_app_wc__print_uint(xiao_env *env, xiao_size v) {
@@ -11958,7 +11991,7 @@ int xiao_app_wc(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/which.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/which.c"
 #include "xiao.h"
 
 static int xiao_app_which__streq(const char *a, const char *b) {
@@ -12000,7 +12033,7 @@ int xiao_app_which(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/xrandr.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/xrandr.c"
 #include "xiao.h"
 
 static int xiao_app_xrandr__streq(const char *a, const char *b) {
@@ -12089,7 +12122,7 @@ int xiao_app_xrandr(xiao_env *env) {
 }
 
 
-#line 1 "/Users/cheontaerang/Documents/GitHub/xiaoOS/apps/xuexi.c"
+#line 1 "/home/sentarotakenaka/xiaoOS/apps/xuexi.c"
 #include "xiao.h"
 
 int xiao_app_xuexi(xiao_env *env) {

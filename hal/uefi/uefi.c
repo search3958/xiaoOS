@@ -201,15 +201,42 @@ static UINT32 uefi_pick_best_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop) {
 
 static int uefi_set_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop, int w, int h) {
     UINT32 i;
+    UINT32 exact_mode = (UINT32)-1;
+    UINT32 fallback_mode = (UINT32)-1;
+    UINT32 fallback_pixels = 0;
+    unsigned long long fallback_score = ~0ull;
     if (!ggop || !ggop->Mode || !ggop->QueryMode || !ggop->SetMode) return -1;
     for (i = 0; i < ggop->Mode->MaxMode; i++) {
         UINTN info_size = 0;
         EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = 0;
         if (ggop->QueryMode(ggop, i, &info_size, &info) == EFI_SUCCESS && info) {
-            int matched = (int)info->HorizontalResolution == w && (int)info->VerticalResolution == h;
-            if (st && st->BootServices && st->BootServices->FreePool) st->BootServices->FreePool(info);
-            if (matched) return ggop->SetMode(ggop, i) == EFI_SUCCESS ? 0 : -1;
+            UINT32 mw = info->HorizontalResolution;
+            UINT32 mh = info->VerticalResolution;
+            if ((int)mw == w && (int)mh == h) {
+                exact_mode = i;
+            } else {
+                UINT32 reqw = w > 0 ? (UINT32)w : 0;
+                UINT32 reqh = h > 0 ? (UINT32)h : 0;
+                UINT32 dw = mw > reqw ? mw - reqw : reqw - mw;
+                UINT32 dh = mh > reqh ? mh - reqh : reqh - mh;
+                unsigned long long score = (unsigned long long)dw + (unsigned long long)dh;
+                UINT32 pixels = mw * mh;
+                if (score < fallback_score || (score == fallback_score && pixels > fallback_pixels)) {
+                    fallback_score = score;
+                    fallback_pixels = pixels;
+                    fallback_mode = i;
+                }
+            }
+            if (st && st->BootServices && st->BootServices->FreePool) {
+                st->BootServices->FreePool(info);
+            }
         }
+    }
+    if (exact_mode != (UINT32)-1) {
+        if (ggop->SetMode(ggop, exact_mode) == EFI_SUCCESS) return 0;
+    }
+    if (fallback_mode != (UINT32)-1) {
+        if (ggop->SetMode(ggop, fallback_mode) == EFI_SUCCESS) return 0;
     }
     return -1;
 }

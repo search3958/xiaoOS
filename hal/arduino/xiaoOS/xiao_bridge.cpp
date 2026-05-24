@@ -12171,11 +12171,6 @@ static void xiao_app_xrandr__print_current(xiao_env *env) {
 }
 
 int xiao_app_xrandr(xiao_env *env) {
-    if (xiao_platform(env) == XIAO_PLATFORM_ESP32) {
-        xiao_console_print(env, "xrandr: not supported on esp32\r\n");
-        return 1;
-    }
-
     if (xiao_argc(env) == 1 || (xiao_argc(env) == 2 && xiao_app_xrandr__streq(xiao_argv(env, 1), "-q"))) {
         xiao_app_xrandr__print_current(env);
         return 0;
@@ -12189,6 +12184,11 @@ int xiao_app_xrandr(xiao_env *env) {
             return 1;
         }
         if (xiao_video_set_mode(env, w, h) != 0) {
+            if (xiao_platform(env) == XIAO_PLATFORM_ESP32) {
+                xiao_console_print(env, "xrandr: mode change unsupported on esp32 (fixed panel)\r\n");
+                xiao_app_xrandr__print_current(env);
+                return 1;
+            }
             xiao_console_print(env, "xrandr: failed to set mode\r\n");
             return 1;
         }

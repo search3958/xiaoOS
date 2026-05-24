@@ -8,6 +8,10 @@ typedef void *EFI_HANDLE;
 typedef unsigned int UINT32;
 typedef unsigned short UINT16;
 typedef unsigned char UINT8;
+typedef unsigned long long UINT64;
+typedef int INT32;
+typedef unsigned char BOOLEAN;
+typedef void *EFI_EVENT;
 
 #define EFI_SUCCESS 0
 
@@ -119,6 +123,39 @@ typedef struct EFI_BOOT_SERVICES {
     void *SetMem;
     void *CreateEventEx;
 } EFI_BOOT_SERVICES;
+
+typedef struct {
+    INT32 RelativeMovementX;
+    INT32 RelativeMovementY;
+    INT32 RelativeMovementZ;
+    BOOLEAN LeftButton;
+    BOOLEAN RightButton;
+} EFI_SIMPLE_POINTER_STATE;
+
+typedef struct {
+    UINT64 ResolutionX;
+    UINT64 ResolutionY;
+    UINT64 ResolutionZ;
+    BOOLEAN LeftButton;
+    BOOLEAN RightButton;
+} EFI_SIMPLE_POINTER_MODE;
+
+struct EFI_SIMPLE_POINTER_PROTOCOL;
+typedef EFI_STATUS (*EFI_SIMPLE_POINTER_RESET)(
+    struct EFI_SIMPLE_POINTER_PROTOCOL *This,
+    BOOLEAN ExtendedVerification
+);
+typedef EFI_STATUS (*EFI_SIMPLE_POINTER_GET_STATE)(
+    struct EFI_SIMPLE_POINTER_PROTOCOL *This,
+    EFI_SIMPLE_POINTER_STATE *State
+);
+
+typedef struct EFI_SIMPLE_POINTER_PROTOCOL {
+    EFI_SIMPLE_POINTER_RESET Reset;
+    EFI_SIMPLE_POINTER_GET_STATE GetState;
+    EFI_EVENT WaitForInput;
+    EFI_SIMPLE_POINTER_MODE *Mode;
+} EFI_SIMPLE_POINTER_PROTOCOL;
 
 typedef enum {
     PixelRedGreenBlueReserved8BitPerColor,

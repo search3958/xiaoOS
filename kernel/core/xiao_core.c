@@ -523,6 +523,13 @@ int xiao_input_read(xiao_env *env) {
     return -1;
 }
 
+int xiao_pointer_read(xiao_env *env, int *x, int *y, int *buttons) {
+    if (env && env->hal && env->hal->pointer_read) {
+        return env->hal->pointer_read(x, y, buttons);
+    }
+    return -1;
+}
+
 int xiao_exec_app(const char *name) {
     const char *argv[1];
     if (!name) return -1;

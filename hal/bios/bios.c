@@ -200,6 +200,8 @@ static const xiao_hal bios_hal = {
     bios_video_size,
     bios_video_set_mode,
     XIAO_PLATFORM_PC,
+    0,
+    0,
 };
 
 void xiao_bios_main(void) {

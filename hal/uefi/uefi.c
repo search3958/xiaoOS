@@ -15,6 +15,11 @@ static EFI_SYSTEM_TABLE *st;
 static int esc_state;
 static EFI_GRAPHICS_OUTPUT_PROTOCOL *gop;
 static int gop_mode_ready;
+static EFI_SIMPLE_POINTER_PROTOCOL *simple_pointer;
+static int pointer_ready;
+static int pointer_x;
+static int pointer_y;
+static int pointer_buttons;
 int _fltused = 0;
 
 typedef enum {
@@ -51,6 +56,9 @@ typedef struct {
 
 static const EFI_GUID gop_guid = {
     0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}
+};
+static const EFI_GUID simple_pointer_guid = {
+    0x31878c87, 0x0b75, 0x11d5, {0x9a, 0x4f, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d}
 };
 
 typedef struct {
@@ -173,6 +181,13 @@ static EFI_GRAPHICS_OUTPUT_PROTOCOL *uefi_get_gop(void) {
     if (!st || !st->BootServices || !st->BootServices->LocateProtocol) return 0;
     if (st->BootServices->LocateProtocol((EFI_GUID *)&gop_guid, 0, (void **)&gop) != EFI_SUCCESS) return 0;
     return gop;
+}
+
+static EFI_SIMPLE_POINTER_PROTOCOL *uefi_get_simple_pointer(void) {
+    if (simple_pointer) return simple_pointer;
+    if (!st || !st->BootServices || !st->BootServices->LocateProtocol) return 0;
+    if (st->BootServices->LocateProtocol((EFI_GUID *)&simple_pointer_guid, 0, (void **)&simple_pointer) != EFI_SUCCESS) return 0;
+    return simple_pointer;
 }
 
 static UINT32 uefi_pick_best_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop) {
@@ -471,6 +486,59 @@ static int uefi_video_fill_rgb888(unsigned int rgb888) {
     return uefi_video_fill_rect_rgb888(0, 0, w, h, rgb888);
 }
 
+static int uefi_pointer_read(int *x, int *y, int *buttons) {
+    EFI_SIMPLE_POINTER_PROTOCOL *ptr;
+    EFI_SIMPLE_POINTER_STATE state;
+    int sw = 0;
+    int sh = 0;
+
+    if (uefi_prepare_gop() != 0) return -1;
+    ptr = uefi_get_simple_pointer();
+    if (!ptr || !ptr->GetState) return -1;
+
+    if (!pointer_ready) {
+        if (uefi_video_size(&sw, &sh) == 0) {
+            pointer_x = sw / 2;
+            pointer_y = sh / 2;
+        } else {
+            pointer_x = 0;
+            pointer_y = 0;
+        }
+        pointer_buttons = 0;
+        pointer_ready = 1;
+        if (ptr->Reset) ptr->Reset(ptr, 0);
+    }
+
+    if (ptr->GetState(ptr, &state) == EFI_SUCCESS) {
+        int dx = state.RelativeMovementX;
+        int dy = state.RelativeMovementY;
+        if (dx > 48) dx = 48;
+        if (dx < -48) dx = -48;
+        if (dy > 48) dy = 48;
+        if (dy < -48) dy = -48;
+        pointer_x += dx;
+        pointer_y += dy;
+        pointer_buttons = (state.LeftButton ? 1 : 0) | (state.RightButton ? 2 : 0);
+
+        if (uefi_video_size(&sw, &sh) == 0) {
+            if (pointer_x < 0) pointer_x = 0;
+            if (pointer_y < 0) pointer_y = 0;
+            if (pointer_x >= sw) pointer_x = sw - 1;
+            if (pointer_y >= sh) pointer_y = sh - 1;
+        }
+
+        if (x) *x = pointer_x;
+        if (y) *y = pointer_y;
+        if (buttons) *buttons = pointer_buttons;
+        return 1;
+    }
+
+    if (x) *x = pointer_x;
+    if (y) *y = pointer_y;
+    if (buttons) *buttons = pointer_buttons;
+    return 0;
+}
+
 static const xiao_hal uefi_hal = {
     uefi_serial_write,
     uefi_console_write,
@@ -484,6 +552,7 @@ static const xiao_hal uefi_hal = {
     uefi_video_set_mode,
     XIAO_PLATFORM_PC,
     uefi_video_blit_rgb888,
+    uefi_pointer_read,
 };
 
 int xiao_uefi_reboot(void) {

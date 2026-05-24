@@ -451,6 +451,7 @@ static const xiao_hal esp32c3_hal = {
     esp32c3_video_set_mode,
     XIAO_PLATFORM_ESP32,
     esp32c3_video_blit_rgb888,
+    0,
 };
 
 void setup() {

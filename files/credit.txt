@@ -5,3 +5,11 @@ https://components.espressif.com/components/espressif/esp_lcd_gc9a01
 TrueType rasterization for terminal CLI mode uses stb_truetype.h by Sean Barrett
 (public domain / MIT-style dual license):
 https://github.com/nothings/stb/blob/master/stb_truetype.h
+
+uitest app bundles HAGL source snapshot (MIT):
+https://github.com/tuupola/hagl
+Bundled under third_party/hagl/
+
+uitest app bundles litehtml source snapshot (BSD-2-Clause):
+https://github.com/litehtml/litehtml
+Bundled under third_party/litehtml/

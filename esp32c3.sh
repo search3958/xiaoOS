@@ -6,7 +6,18 @@ cd "$(dirname "$0")"
 FQBN="${FQBN:-esp32:esp32:esp32s3:CDCOnBoot=cdc}"
 BAUD="${BAUD:-115200}"
 ACTION="${1:-upload-monitor}"
-BUILD_EXTRA_FLAGS="${EXTRA_FLAGS:-}"
+DEFAULT_EXTRA_FLAGS="-I$PWD/third_party/litehtml/include -I$PWD/third_party/litehtml/include/litehtml -I$PWD/third_party/litehtml/src -I$PWD/third_party/litehtml/src/gumbo -I$PWD/third_party/litehtml/src/gumbo/include -I$PWD/third_party/litehtml/src/gumbo/include/gumbo"
+DEFAULT_CPP_EXTRA_FLAGS=""
+if [ -n "${EXTRA_FLAGS:-}" ]; then
+    BUILD_EXTRA_FLAGS="$DEFAULT_EXTRA_FLAGS $EXTRA_FLAGS"
+else
+    BUILD_EXTRA_FLAGS="$DEFAULT_EXTRA_FLAGS"
+fi
+if [ -n "${CPP_EXTRA_FLAGS:-}" ]; then
+    BUILD_CPP_EXTRA_FLAGS="$DEFAULT_CPP_EXTRA_FLAGS $CPP_EXTRA_FLAGS"
+else
+    BUILD_CPP_EXTRA_FLAGS="$DEFAULT_CPP_EXTRA_FLAGS"
+fi
 
 resolve_arduino_cli() {
     if [ -n "${ARDUINO_CLI:-}" ] && [ -x "${ARDUINO_CLI}" ]; then
@@ -76,8 +87,14 @@ python3 tools/sync_sketch.py hal/esp32c3/xiaoOS
 
 case "$ACTION" in
     compile)
-        if [ -n "$BUILD_EXTRA_FLAGS" ]; then
-            "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property build.extra_flags="$BUILD_EXTRA_FLAGS" hal/esp32c3/xiaoOS
+        if [ -n "$BUILD_EXTRA_FLAGS" ] || [ -n "$BUILD_CPP_EXTRA_FLAGS" ]; then
+            if [ -n "$BUILD_EXTRA_FLAGS" ] && [ -n "$BUILD_CPP_EXTRA_FLAGS" ]; then
+                "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property build.extra_flags="$BUILD_EXTRA_FLAGS" --build-property compiler.cpp.extra_flags="$BUILD_CPP_EXTRA_FLAGS" hal/esp32c3/xiaoOS
+            elif [ -n "$BUILD_EXTRA_FLAGS" ]; then
+                "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property build.extra_flags="$BUILD_EXTRA_FLAGS" hal/esp32c3/xiaoOS
+            else
+                "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property compiler.cpp.extra_flags="$BUILD_CPP_EXTRA_FLAGS" hal/esp32c3/xiaoOS
+            fi
         else
             "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" hal/esp32c3/xiaoOS
         fi
@@ -85,8 +102,14 @@ case "$ACTION" in
     upload)
         port="$(detect_port)"
         echo "Using $port with $FQBN"
-        if [ -n "$BUILD_EXTRA_FLAGS" ]; then
-            "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property build.extra_flags="$BUILD_EXTRA_FLAGS" --upload -p "$port" hal/esp32c3/xiaoOS
+        if [ -n "$BUILD_EXTRA_FLAGS" ] || [ -n "$BUILD_CPP_EXTRA_FLAGS" ]; then
+            if [ -n "$BUILD_EXTRA_FLAGS" ] && [ -n "$BUILD_CPP_EXTRA_FLAGS" ]; then
+                "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property build.extra_flags="$BUILD_EXTRA_FLAGS" --build-property compiler.cpp.extra_flags="$BUILD_CPP_EXTRA_FLAGS" --upload -p "$port" hal/esp32c3/xiaoOS
+            elif [ -n "$BUILD_EXTRA_FLAGS" ]; then
+                "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property build.extra_flags="$BUILD_EXTRA_FLAGS" --upload -p "$port" hal/esp32c3/xiaoOS
+            else
+                "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property compiler.cpp.extra_flags="$BUILD_CPP_EXTRA_FLAGS" --upload -p "$port" hal/esp32c3/xiaoOS
+            fi
         else
             "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --upload -p "$port" hal/esp32c3/xiaoOS
         fi
@@ -99,8 +122,14 @@ case "$ACTION" in
     upload-monitor)
         port="$(detect_port)"
         echo "Using $port with $FQBN"
-        if [ -n "$BUILD_EXTRA_FLAGS" ]; then
-            "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property build.extra_flags="$BUILD_EXTRA_FLAGS" --upload -p "$port" hal/esp32c3/xiaoOS
+        if [ -n "$BUILD_EXTRA_FLAGS" ] || [ -n "$BUILD_CPP_EXTRA_FLAGS" ]; then
+            if [ -n "$BUILD_EXTRA_FLAGS" ] && [ -n "$BUILD_CPP_EXTRA_FLAGS" ]; then
+                "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property build.extra_flags="$BUILD_EXTRA_FLAGS" --build-property compiler.cpp.extra_flags="$BUILD_CPP_EXTRA_FLAGS" --upload -p "$port" hal/esp32c3/xiaoOS
+            elif [ -n "$BUILD_EXTRA_FLAGS" ]; then
+                "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property build.extra_flags="$BUILD_EXTRA_FLAGS" --upload -p "$port" hal/esp32c3/xiaoOS
+            else
+                "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property compiler.cpp.extra_flags="$BUILD_CPP_EXTRA_FLAGS" --upload -p "$port" hal/esp32c3/xiaoOS
+            fi
         else
             "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --upload -p "$port" hal/esp32c3/xiaoOS
         fi

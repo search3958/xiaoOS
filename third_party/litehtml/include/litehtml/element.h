@@ -104,6 +104,7 @@ namespace litehtml
 		virtual bool				set_pseudo_class(string_id cls, bool add);
 		virtual bool				set_class(const char* pclass, bool add);
 		virtual bool				is_replaced() const;
+		virtual bool				get_custom_property(string_id name, css_token_vector& result) const;
 		virtual void				compute_styles(bool recursive = true);
 		virtual void				draw(uint_ptr hdc, pixel_t x, pixel_t y, const position *clip, const std::shared_ptr<render_item>& ri);
 		virtual void				draw_background(uint_ptr hdc, pixel_t x, pixel_t y, const position *clip, const std::shared_ptr<render_item> &ri);

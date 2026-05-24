@@ -6,23 +6,20 @@
 #define NULL ((void *)0)
 #endif
 
-#define UI_GLYPH_SIDE_MAX 96
+#define UI_GLYPH_SIDE_MAX 64
 #define UI_GLYPH_BITMAP_MAX (UI_GLYPH_SIDE_MAX * UI_GLYPH_SIDE_MAX)
 #define UI_TTF_ARENA_SIZE (128 * 1024)
-#define UI_LAYER_COUNT 10
+#define UI_LAYER_COUNT 6
 #define UI_CURSOR_SIZE 7
+#define UI_HTML_BUF_MAX 2048
 
 enum {
     LAYER_ROOT_BG = 0,
-    LAYER_PANEL_BG = 1,
-    LAYER_PANEL_ACCENT = 2,
-    LAYER_TITLE_TEXT = 3,
-    LAYER_PARAGRAPH_TEXT = 4,
-    LAYER_HINT_TEXT = 5,
-    LAYER_BUTTON_BG = 6,
-    LAYER_BUTTON_TEXT = 7,
-    LAYER_STATUS_TEXT = 8,
-    LAYER_CURSOR = 9
+    LAYER_TITLE_TEXT = 1,
+    LAYER_PARAGRAPH_TEXT = 2,
+    LAYER_BUTTON_BG = 3,
+    LAYER_BUTTON_TEXT = 4,
+    LAYER_CURSOR = 5
 };
 
 typedef struct {
@@ -56,25 +53,19 @@ typedef struct {
 } litehtml_document_t;
 
 typedef struct {
-    int panel_x;
-    int panel_y;
-    int panel_w;
-    int panel_h;
+    int content_x;
+    int content_y;
+    int content_w;
     int title_x;
     int title_y;
     int paragraph_x;
     int paragraph_y;
-    int hint_x;
-    int hint_y;
     int button_x;
     int button_y;
     int button_w;
     int button_h;
     int button_text_x;
     int button_text_y;
-    int status_x;
-    int status_y;
-    int line_step;
 } litehtml_layout_t;
 
 static xiao_size xstrlen(const char *s) {
@@ -247,9 +238,9 @@ struct ui_state {
 
     int hovered;
     int pressing;
-    int toggled;
-
+    int gui_mode;
     int pointer_supported;
+
     int pointer_x;
     int pointer_y;
     int pointer_buttons;
@@ -258,6 +249,29 @@ struct ui_state {
     int pointer_prev_buttons;
     int pointer_inited;
 };
+
+#if defined(ARDUINO) && defined(ESP32)
+typedef struct {
+    int ok;
+    int title_x;
+    int title_y;
+    int title_w;
+    int title_h;
+    int paragraph_x;
+    int paragraph_y;
+    int paragraph_w;
+    int paragraph_h;
+    int button_x;
+    int button_y;
+    int button_w;
+    int button_h;
+    char title[96];
+    char paragraph[160];
+    char button[64];
+} xiao_litehtml_layout_result;
+
+int xiao_litehtml_layout(const char *html, int viewport_w, int viewport_h, xiao_litehtml_layout_result *out);
+#endif
 
 static void copy_cap(char *dst, xiao_size cap, const char *src) {
     xiao_size i = 0;
@@ -424,20 +438,20 @@ static int css_read_int_px(const char *css, const char *name, int *out) {
 }
 
 static void litehtml_default_style(litehtml_style_t *s) {
-    s->bg_color = 0xE2E8F0u;
+    s->bg_color = 0xFFFFFFu;
     s->panel_color = 0xFFFFFFu;
-    s->text_color = 0x0F172Au;
-    s->muted_text_color = 0x475569u;
-    s->accent_color = 0x2563EBu;
-    s->button_color = 0x2563EBu;
-    s->button_hover_color = 0x1D4ED8u;
-    s->button_pressed_color = 0x0F766Eu;
-    s->button_text_color = 0xF8FAFCu;
-    s->panel_margin = 10;
-    s->panel_padding = 12;
-    s->title_px = 26;
-    s->body_px = 17;
-    s->button_height = 34;
+    s->text_color = 0x111827u;
+    s->muted_text_color = 0x4B5563u;
+    s->accent_color = 0x111827u;
+    s->button_color = 0xE5E7EBu;
+    s->button_hover_color = 0xD1D5DBu;
+    s->button_pressed_color = 0x9CA3AFu;
+    s->button_text_color = 0x111827u;
+    s->panel_margin = 14;
+    s->panel_padding = 0;
+    s->title_px = 24;
+    s->body_px = 16;
+    s->button_height = 30;
 }
 
 static void litehtml_parse_style(const char *css, litehtml_style_t *style) {
@@ -475,9 +489,45 @@ static void litehtml_parse_demo(const char *html, litehtml_document_t *doc) {
     if (!doc) return;
     extract_tag_text(html, "h1", doc->title, sizeof(doc->title), "HAGL + LiteHTML UI Test");
     extract_tag_text(html, "p", doc->paragraph, sizeof(doc->paragraph), "Layout by LiteHTML, render by HAGL layers");
-    extract_tag_text(html, "button", doc->button, sizeof(doc->button), "Toggle state");
+    extract_tag_text(html, "button", doc->button, sizeof(doc->button), "Button");
     extract_style_block(html, css, sizeof(css));
     litehtml_parse_style(css, &doc->style);
+}
+
+static const char *load_ui_html(void) {
+    static const char fallback_html[] =
+        "<html><body>"
+        "<h1>HAGL + LiteHTML UI Test</h1>"
+        "<p>LiteHTML computes layout only. HAGL renders per layer.</p>"
+        "<button>CLICK</button>"
+        "<button>CLICK</button>"
+        "<button>CLICK</button>"
+        "<button>CLICK</button>"
+        "<button>CLICK</button>"
+        "<button>CLICK</button>"
+        "<button>CLICK</button>"
+        "<button>CLICK</button>"
+        "<button>CLICK</button>"
+        "<button>CLICK</button>"
+        "<button>CLICK</button>"
+        "<button>CLICK</button>"
+        "<button>CLICK</button>"
+        "</body></html>";
+    static char html_buf[UI_HTML_BUF_MAX];
+    const char *src = 0;
+    xiao_size size = 0;
+    xiao_size i;
+    xiao_size copy_n;
+
+    if (xiao_fs_read("/uitest.html", &src, &size) != 0 || !src || size == 0) {
+        return fallback_html;
+    }
+
+    copy_n = size;
+    if (copy_n >= UI_HTML_BUF_MAX) copy_n = UI_HTML_BUF_MAX - 1;
+    for (i = 0; i < copy_n; i++) html_buf[i] = src[i];
+    html_buf[copy_n] = 0;
+    return html_buf;
 }
 
 static int hagl_init_surface(hagl_surface_t *s, xiao_env *env) {
@@ -612,42 +662,68 @@ static int ui_font_init(ui_state_t *ui) {
 
 static void litehtml_compute_layout(ui_state_t *ui) {
     int margin = ui->doc.style.panel_margin;
-    int pad = ui->doc.style.panel_padding;
-    int button_min = 108;
+    int button_min = 88;
     int button_w;
 
-    ui->layout.panel_x = margin;
-    ui->layout.panel_y = margin;
-    ui->layout.panel_w = ui->surface.width - margin * 2;
-    ui->layout.panel_h = ui->surface.height - margin * 2;
-    if (ui->layout.panel_w < 72) ui->layout.panel_w = 72;
-    if (ui->layout.panel_h < 72) ui->layout.panel_h = 72;
+    ui->layout.content_x = margin;
+    ui->layout.content_y = margin;
+    ui->layout.content_w = ui->surface.width - margin * 2;
+    if (ui->layout.content_w < 72) ui->layout.content_w = 72;
 
-    ui->layout.title_x = ui->layout.panel_x + pad;
-    ui->layout.title_y = ui->layout.panel_y + pad;
+    ui->layout.title_x = ui->layout.content_x;
+    ui->layout.title_y = ui->layout.content_y;
 
-    ui->layout.paragraph_x = ui->layout.panel_x + pad;
-    ui->layout.paragraph_y = ui->layout.title_y + ui->font.title_line_h + 10;
+    ui->layout.paragraph_x = ui->layout.content_x;
+    ui->layout.paragraph_y = ui->layout.title_y + ui->font.title_line_h + 8;
 
-    ui->layout.hint_x = ui->layout.panel_x + pad;
-    ui->layout.hint_y = ui->layout.paragraph_y + ui->font.body_line_h + 8;
-
-    button_w = text_width_px(&ui->font, ui->font.body_scale, ui->doc.button) + 30;
+    button_w = text_width_px(&ui->font, ui->font.body_scale, ui->doc.button) + 20;
     if (button_w < button_min) button_w = button_min;
-    if (button_w > ui->layout.panel_w - pad * 2) button_w = ui->layout.panel_w - pad * 2;
+    if (button_w > ui->layout.content_w) button_w = ui->layout.content_w;
 
     ui->layout.button_w = button_w;
     ui->layout.button_h = ui->doc.style.button_height;
-    ui->layout.button_x = ui->layout.panel_x + (ui->layout.panel_w - button_w) / 2;
-    ui->layout.button_y = ui->layout.hint_y + ui->font.body_line_h + 10;
+    ui->layout.button_x = ui->layout.content_x;
+    ui->layout.button_y = ui->layout.paragraph_y + ui->font.body_line_h + 10;
+    ui->layout.button_text_x = ui->layout.button_x + (ui->layout.button_w - text_width_px(&ui->font, ui->font.body_scale, ui->doc.button)) / 2;
+    ui->layout.button_text_y = ui->layout.button_y + (ui->layout.button_h - ui->font.body_line_h) / 2;
+}
 
+#if defined(ARDUINO) && defined(ESP32)
+static int litehtml_compute_layout_real(ui_state_t *ui, const char *html) {
+    xiao_litehtml_layout_result r;
+    int fallback_button_w;
+
+    if (!ui || !html) return -1;
+    if (xiao_litehtml_layout(html, ui->surface.width, ui->surface.height, &r) != 0 || !r.ok) return -1;
+
+    if (r.title[0]) copy_cap(ui->doc.title, sizeof(ui->doc.title), r.title);
+    if (r.paragraph[0]) copy_cap(ui->doc.paragraph, sizeof(ui->doc.paragraph), r.paragraph);
+    if (r.button[0]) copy_cap(ui->doc.button, sizeof(ui->doc.button), r.button);
+
+    ui->layout.content_x = ui->doc.style.panel_margin;
+    ui->layout.content_y = ui->doc.style.panel_margin;
+    ui->layout.content_w = ui->surface.width - ui->doc.style.panel_margin * 2;
+    if (ui->layout.content_w < 72) ui->layout.content_w = 72;
+
+    ui->layout.title_x = r.title_w > 0 ? r.title_x : ui->layout.content_x;
+    ui->layout.title_y = r.title_h > 0 ? r.title_y : ui->layout.content_y;
+
+    ui->layout.paragraph_x = r.paragraph_w > 0 ? r.paragraph_x : ui->layout.content_x;
+    ui->layout.paragraph_y = r.paragraph_h > 0 ? r.paragraph_y : (ui->layout.title_y + ui->font.title_line_h + 8);
+
+    fallback_button_w = text_width_px(&ui->font, ui->font.body_scale, ui->doc.button) + 20;
+    if (fallback_button_w < 88) fallback_button_w = 88;
+
+    ui->layout.button_w = r.button_w > 0 ? r.button_w : fallback_button_w;
+    ui->layout.button_h = r.button_h > 0 ? r.button_h : ui->doc.style.button_height;
+    ui->layout.button_x = r.button_w > 0 ? r.button_x : ui->layout.content_x;
+    ui->layout.button_y = r.button_h > 0 ? r.button_y : (ui->layout.paragraph_y + ui->font.body_line_h + 10);
     ui->layout.button_text_x = ui->layout.button_x + (ui->layout.button_w - text_width_px(&ui->font, ui->font.body_scale, ui->doc.button)) / 2;
     ui->layout.button_text_y = ui->layout.button_y + (ui->layout.button_h - ui->font.body_line_h) / 2;
 
-    ui->layout.status_x = ui->layout.panel_x + pad;
-    ui->layout.status_y = ui->layout.button_y + ui->layout.button_h + 12;
-    ui->layout.line_step = ui->font.body_line_h + 4;
+    return 0;
 }
+#endif
 
 static unsigned int ui_button_fill(const ui_state_t *ui) {
     if (ui->pressing) return ui->doc.style.button_pressed_color;
@@ -655,11 +731,11 @@ static unsigned int ui_button_fill(const ui_state_t *ui) {
     return ui->doc.style.button_color;
 }
 
-static const char *ui_status_text(const ui_state_t *ui) {
-    if (ui->pressing) return "status: pressed";
-    if (ui->hovered) return "status: hover";
-    if (ui->toggled) return "status: clicked";
-    return "status: ready";
+static void draw_button_box(ui_state_t *ui, ui_layer_t *l, unsigned int fill) {
+    hagl_fill_rect(&ui->surface, l->x, l->y, l->w, l->h, 0x6B7280u);
+    if (l->w > 2 && l->h > 2) {
+        hagl_fill_rect(&ui->surface, l->x + 1, l->y + 1, l->w - 2, l->h - 2, fill);
+    }
 }
 
 static void render_root_bg(ui_state_t *ui, int layer_id) {
@@ -667,65 +743,47 @@ static void render_root_bg(ui_state_t *ui, int layer_id) {
     hagl_fill(&ui->surface, ui->doc.style.bg_color);
 }
 
-static void render_panel_bg(ui_state_t *ui, int layer_id) {
-    ui_layer_t *l = &ui->layers[layer_id];
-    hagl_fill_rect(&ui->surface, l->x, l->y, l->w, l->h, ui->doc.style.panel_color);
-}
-
-static void render_panel_accent(ui_state_t *ui, int layer_id) {
-    ui_layer_t *l = &ui->layers[layer_id];
-    hagl_fill_rect(&ui->surface, l->x, l->y, l->w, l->h, ui->doc.style.accent_color);
-}
-
 static void render_title(ui_state_t *ui, int layer_id) {
     ui_layer_t *l = &ui->layers[layer_id];
-    hagl_fill_rect(&ui->surface, l->x, l->y, l->w, l->h, ui->doc.style.panel_color);
-    draw_text(ui, ui->layout.title_x, ui->layout.title_y, ui->doc.title, ui->font.title_scale, ui->font.title_ascent, ui->doc.style.text_color, ui->doc.style.panel_color);
+    hagl_fill_rect(&ui->surface, l->x, l->y, l->w, l->h, ui->doc.style.bg_color);
+    draw_text(ui, ui->layout.title_x, ui->layout.title_y, ui->doc.title, ui->font.title_scale, ui->font.title_ascent, ui->doc.style.text_color, ui->doc.style.bg_color);
 }
 
 static void render_paragraph(ui_state_t *ui, int layer_id) {
     ui_layer_t *l = &ui->layers[layer_id];
-    hagl_fill_rect(&ui->surface, l->x, l->y, l->w, l->h, ui->doc.style.panel_color);
-    draw_text(ui, ui->layout.paragraph_x, ui->layout.paragraph_y, ui->doc.paragraph, ui->font.body_scale, ui->font.body_ascent, ui->doc.style.text_color, ui->doc.style.panel_color);
-}
-
-static void render_hint(ui_state_t *ui, int layer_id) {
-    const char *hint = ui->pointer_supported ? "mouse hover/click supported, q or esc exits" : "pointer unsupported, enter/space toggles";
-    ui_layer_t *l = &ui->layers[layer_id];
-    hagl_fill_rect(&ui->surface, l->x, l->y, l->w, l->h, ui->doc.style.panel_color);
-    draw_text(ui, ui->layout.hint_x, ui->layout.hint_y, hint, ui->font.body_scale, ui->font.body_ascent, ui->doc.style.muted_text_color, ui->doc.style.panel_color);
+    hagl_fill_rect(&ui->surface, l->x, l->y, l->w, l->h, ui->doc.style.bg_color);
+    draw_text(ui, ui->layout.paragraph_x, ui->layout.paragraph_y, ui->doc.paragraph, ui->font.body_scale, ui->font.body_ascent, ui->doc.style.text_color, ui->doc.style.bg_color);
 }
 
 static void render_button_bg(ui_state_t *ui, int layer_id) {
     ui_layer_t *l = &ui->layers[layer_id];
-    hagl_fill_rect(&ui->surface, l->x, l->y, l->w, l->h, ui_button_fill(ui));
+    draw_button_box(ui, l, ui_button_fill(ui));
 }
 
 static void render_button_text(ui_state_t *ui, int layer_id) {
     ui_layer_t *l = &ui->layers[layer_id];
     unsigned int fill = ui_button_fill(ui);
-    hagl_fill_rect(&ui->surface, l->x, l->y, l->w, l->h, fill);
+    draw_button_box(ui, l, fill);
     draw_text(ui, ui->layout.button_text_x, ui->layout.button_text_y, ui->doc.button, ui->font.body_scale, ui->font.body_ascent, ui->doc.style.button_text_color, fill);
 }
 
-static void render_status(ui_state_t *ui, int layer_id) {
-    ui_layer_t *l = &ui->layers[layer_id];
-    hagl_fill_rect(&ui->surface, l->x, l->y, l->w, l->h, ui->doc.style.panel_color);
-    draw_text(ui, ui->layout.status_x, ui->layout.status_y, ui_status_text(ui), ui->font.body_scale, ui->font.body_ascent, ui->doc.style.muted_text_color, ui->doc.style.panel_color);
-}
-
 static void render_cursor(ui_state_t *ui, int layer_id) {
-    int cx;
-    int cy;
+    int cx, cy;
     (void)layer_id;
 
-    if (!ui->pointer_supported || !ui->pointer_inited) return;
+    if (!ui->gui_mode || !ui->pointer_supported || !ui->pointer_inited) return;
 
     cx = ui->pointer_x;
     cy = ui->pointer_y;
-    hagl_fill_rect(&ui->surface, cx - 1, cy - 1, 3, 3, 0x111827u);
-    hagl_fill_rect(&ui->surface, cx - 3, cy, UI_CURSOR_SIZE, 1, 0xFFFFFFu);
-    hagl_fill_rect(&ui->surface, cx, cy - 3, 1, UI_CURSOR_SIZE, 0xFFFFFFu);
+    hagl_fill_rect(&ui->surface, cx, cy, 8, 1, 0x111827u);
+    hagl_fill_rect(&ui->surface, cx, cy + 1, 7, 1, 0x111827u);
+    hagl_fill_rect(&ui->surface, cx, cy + 2, 6, 1, 0x111827u);
+    hagl_fill_rect(&ui->surface, cx, cy + 3, 5, 1, 0x111827u);
+    hagl_fill_rect(&ui->surface, cx, cy + 4, 4, 1, 0x111827u);
+    hagl_fill_rect(&ui->surface, cx, cy + 5, 3, 1, 0x111827u);
+    hagl_fill_rect(&ui->surface, cx, cy + 6, 2, 1, 0x111827u);
+    hagl_fill_rect(&ui->surface, cx + 1, cy + 1, 1, 1, 0xFFFFFFu);
+    hagl_fill_rect(&ui->surface, cx + 1, cy + 2, 1, 1, 0xFFFFFFu);
 }
 
 static void layer_set(ui_state_t *ui, int id, int x, int y, int w, int h, layer_render_fn_t render) {
@@ -762,9 +820,8 @@ static void ui_mark_under_rect(ui_state_t *ui, int x, int y, int w, int h) {
 }
 
 static void ui_mark_cursor_move(ui_state_t *ui, int old_x, int old_y, int new_x, int new_y) {
-    int half = UI_CURSOR_SIZE / 2;
-    ui_mark_under_rect(ui, old_x - half, old_y - half, UI_CURSOR_SIZE, UI_CURSOR_SIZE);
-    ui_mark_under_rect(ui, new_x - half, new_y - half, UI_CURSOR_SIZE, UI_CURSOR_SIZE);
+    ui_mark_under_rect(ui, old_x, old_y, UI_CURSOR_SIZE + 1, UI_CURSOR_SIZE);
+    ui_mark_under_rect(ui, new_x, new_y, UI_CURSOR_SIZE + 1, UI_CURSOR_SIZE);
     ui_mark_dirty(ui, LAYER_CURSOR);
 }
 
@@ -780,7 +837,6 @@ static void ui_redraw_dirty(ui_state_t *ui) {
 static void ui_mark_interaction_layers(ui_state_t *ui) {
     ui_mark_dirty(ui, LAYER_BUTTON_BG);
     ui_mark_dirty(ui, LAYER_BUTTON_TEXT);
-    ui_mark_dirty(ui, LAYER_STATUS_TEXT);
 }
 
 static int ui_point_in_button(const ui_state_t *ui, int x, int y) {
@@ -789,32 +845,20 @@ static int ui_point_in_button(const ui_state_t *ui, int x, int y) {
 }
 
 static void ui_setup_layers(ui_state_t *ui) {
-    int pad = ui->doc.style.panel_padding;
-
     layer_set(ui, LAYER_ROOT_BG, 0, 0, ui->surface.width, ui->surface.height, render_root_bg);
-    layer_set(ui, LAYER_PANEL_BG, ui->layout.panel_x, ui->layout.panel_y, ui->layout.panel_w, ui->layout.panel_h, render_panel_bg);
-    layer_set(ui, LAYER_PANEL_ACCENT, ui->layout.panel_x, ui->layout.panel_y, ui->layout.panel_w, 4, render_panel_accent);
-
     layer_set(ui, LAYER_TITLE_TEXT,
-        ui->layout.panel_x + pad,
+        ui->layout.title_x,
         ui->layout.title_y,
-        ui->layout.panel_w - pad * 2,
+        ui->layout.content_w,
         ui->font.title_line_h,
         render_title);
 
     layer_set(ui, LAYER_PARAGRAPH_TEXT,
-        ui->layout.panel_x + pad,
+        ui->layout.paragraph_x,
         ui->layout.paragraph_y,
-        ui->layout.panel_w - pad * 2,
+        ui->layout.content_w,
         ui->font.body_line_h,
         render_paragraph);
-
-    layer_set(ui, LAYER_HINT_TEXT,
-        ui->layout.panel_x + pad,
-        ui->layout.hint_y,
-        ui->layout.panel_w - pad * 2,
-        ui->font.body_line_h,
-        render_hint);
 
     layer_set(ui, LAYER_BUTTON_BG,
         ui->layout.button_x,
@@ -830,13 +874,6 @@ static void ui_setup_layers(ui_state_t *ui) {
         ui->layout.button_h,
         render_button_text);
 
-    layer_set(ui, LAYER_STATUS_TEXT,
-        ui->layout.panel_x + pad,
-        ui->layout.status_y,
-        ui->layout.panel_w - pad * 2,
-        ui->font.body_line_h + 4,
-        render_status);
-
     layer_set(ui, LAYER_CURSOR, 0, 0, ui->surface.width, ui->surface.height, render_cursor);
 }
 
@@ -844,16 +881,19 @@ static int ui_poll_pointer(ui_state_t *ui) {
     int x = ui->pointer_x;
     int y = ui->pointer_y;
     int buttons = ui->pointer_buttons;
-    int rc = xiao_pointer_read(ui->surface.env, &x, &y, &buttons);
+    int rc;
     int changed = 0;
 
+    if (!ui->gui_mode) return 0;
+
+    rc = xiao_pointer_read(ui->surface.env, &x, &y, &buttons);
     if (rc < 0) {
+        ui->pointer_supported = 0;
         return 0;
     }
 
     if (!ui->pointer_supported) {
         ui->pointer_supported = 1;
-        ui_mark_dirty(ui, LAYER_HINT_TEXT);
         changed = 1;
     }
 
@@ -887,18 +927,12 @@ static int ui_poll_pointer(ui_state_t *ui) {
     {
         int was_hovered = ui->hovered;
         int was_pressing = ui->pressing;
-        int was_toggled = ui->toggled;
         int left_now = (ui->pointer_buttons & 1) != 0;
-        int left_prev = (ui->pointer_prev_buttons & 1) != 0;
 
         ui->hovered = ui_point_in_button(ui, ui->pointer_x, ui->pointer_y);
         ui->pressing = ui->hovered && left_now;
 
-        if (left_prev && !left_now && ui->hovered) {
-            ui->toggled = !ui->toggled;
-        }
-
-        if (was_hovered != ui->hovered || was_pressing != ui->pressing || was_toggled != ui->toggled) {
+        if (was_hovered != ui->hovered || was_pressing != ui->pressing) {
             ui_mark_interaction_layers(ui);
             changed = 1;
         }
@@ -909,67 +943,73 @@ static int ui_poll_pointer(ui_state_t *ui) {
 }
 
 int xiao_app_entry(xiao_env *env) {
-    static const char demo_html[] =
-        "<html><head><style>"
-        ":root {"
-        "--bg:#E2E8F0;"
-        "--panel:#FFFFFF;"
-        "--text:#0F172A;"
-        "--muted:#475569;"
-        "--accent:#2563EB;"
-        "--button:#2563EB;"
-        "--button-hover:#1D4ED8;"
-        "--button-pressed:#0F766E;"
-        "--button-text:#F8FAFC;"
-        "--panel-margin:10px;"
-        "--panel-padding:12px;"
-        "--title-px:26px;"
-        "--body-px:17px;"
-        "--button-height:34px;"
-        "}"
-        "</style></head><body>"
-        "<h1>HAGL + LiteHTML UI Test</h1>"
-        "<p>LiteHTML computes layout only. HAGL draws layered rectangles.</p>"
-        "<button>Toggle state</button>"
-        "</body></html>";
     ui_state_t ui;
+    const char *demo_html;
+    int prev_mode = xiao_mode_get();
+    int switched_gui = 0;
+    int rc = 1;
+
+    if (prev_mode != XIAO_MODE_GUI && xiao_mode_set(XIAO_MODE_GUI) == 0) {
+        switched_gui = 1;
+    }
+    ui.gui_mode = xiao_mode_get() == XIAO_MODE_GUI;
 
     if (hagl_init_surface(&ui.surface, env) != 0) {
         xiao_console_print(env, "uitest: video output unavailable\r\n");
-        return 1;
+        goto out;
     }
 
-    if (xiao_platform(env) != XIAO_PLATFORM_ESP32) {
+    if (ui.gui_mode && xiao_platform(env) != XIAO_PLATFORM_ESP32) {
         xiao_video_set_mode(env, 1280, 720);
         hagl_init_surface(&ui.surface, env);
     }
 
     ui.hovered = 0;
     ui.pressing = 0;
-    ui.toggled = 0;
     ui.pointer_supported = 0;
-    ui.pointer_x = 0;
-    ui.pointer_y = 0;
+    ui.pointer_x = ui.surface.width / 2;
+    ui.pointer_y = ui.surface.height / 2;
     ui.pointer_buttons = 0;
-    ui.pointer_prev_x = 0;
-    ui.pointer_prev_y = 0;
+    ui.pointer_prev_x = ui.pointer_x;
+    ui.pointer_prev_y = ui.pointer_y;
     ui.pointer_prev_buttons = 0;
     ui.pointer_inited = 0;
 
+    demo_html = load_ui_html();
     litehtml_parse_demo(demo_html, &ui.doc);
-    if (ui.surface.width < 320) {
+    if (ui.surface.width <= 320 || ui.surface.height <= 320) {
+        if (ui.doc.style.panel_margin > 6) ui.doc.style.panel_margin = 6;
+        if (ui.doc.style.panel_padding > 8) ui.doc.style.panel_padding = 8;
         if (ui.doc.style.title_px > 20) ui.doc.style.title_px = 20;
-        if (ui.doc.style.body_px > 14) ui.doc.style.body_px = 14;
-        if (ui.doc.style.button_height > 28) ui.doc.style.button_height = 28;
+        if (ui.doc.style.body_px > 13) ui.doc.style.body_px = 13;
+        if (ui.doc.style.button_height > 26) ui.doc.style.button_height = 26;
     }
 
-    if (ui_font_init(&ui) != 0) return 1;
+    if (ui_font_init(&ui) != 0) goto out;
 
-    litehtml_compute_layout(&ui);
+    {
+        int used_real_layout = 0;
+#if defined(ARDUINO) && defined(ESP32)
+        if (litehtml_compute_layout_real(&ui, demo_html) == 0) {
+            used_real_layout = 1;
+            xiao_console_print(env, "uitest: LiteHTML real layout active\r\n");
+        }
+#endif
+        if (!used_real_layout) {
+            litehtml_compute_layout(&ui);
+            xiao_console_print(env, "uitest: LiteHTML fallback layout active\r\n");
+        }
+    }
     ui_setup_layers(&ui);
+    ui_poll_pointer(&ui);
     ui_redraw_dirty(&ui);
 
-    xiao_console_print(env, "uitest: mouse hover/click + enter/space fallback, q exits\r\n");
+    xiao_console_print(env, "uitest: html display mode, q exits\r\n");
+    if (ui.pointer_supported) {
+        xiao_console_print(env, "uitest: pointer detected\r\n");
+    } else {
+        xiao_console_print(env, "uitest: pointer unsupported\r\n");
+    }
 
     while (1) {
         int ch;
@@ -978,17 +1018,6 @@ int xiao_app_entry(xiao_env *env) {
         ch = xiao_input_read(env);
         if (ch >= 0) {
             if (ch == 'q' || ch == 'Q' || ch == 27) break;
-
-            if (ch == 'h' || ch == 'H') {
-                ui.hovered = !ui.hovered;
-                ui_mark_interaction_layers(&ui);
-                changed = 1;
-            } else if (ch == '\r' || ch == '\n' || ch == ' ') {
-                ui.toggled = !ui.toggled;
-                ui.pressing = 0;
-                ui_mark_interaction_layers(&ui);
-                changed = 1;
-            }
         }
 
         if (changed) {
@@ -999,7 +1028,13 @@ int xiao_app_entry(xiao_env *env) {
     }
 
     xiao_console_print(env, "uitest: done\r\n");
-    return 0;
+    rc = 0;
+
+out:
+    if (switched_gui) {
+        xiao_mode_set(prev_mode);
+    }
+    return rc;
 }
 
 #else

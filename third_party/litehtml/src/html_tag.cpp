@@ -332,7 +332,7 @@ bool html_tag::get_custom_property(string_id name, css_token_vector& result) con
 		result = value.get<css_token_vector>();
 		return true;
 	}
-	else if (auto _parent = dynamic_cast<html_tag*>(parent().get()))
+	else if (auto _parent = parent())
 	{
 		return _parent->get_custom_property(name, result);
 	}

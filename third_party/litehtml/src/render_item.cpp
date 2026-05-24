@@ -1228,7 +1228,11 @@ void litehtml::render_item::get_rendering_boxes( position::vector& redraw_boxes)
 
 void litehtml::render_item::dump(litehtml::dumper& cout)
 {
+#if defined(__GXX_RTTI) || defined(_CPPRTTI)
     cout.begin_node(src_el()->dump_get_name() + "{" + string(typeid(*this).name()) + "}");
+#else
+    cout.begin_node(src_el()->dump_get_name() + "{render_item}");
+#endif
 
     auto attrs = src_el()->dump_get_attrs();
     if(!attrs.empty())

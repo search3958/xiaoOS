@@ -55,6 +55,8 @@ exec qemu-system-x86_64 \
     -m 512M \
     -drive if=pflash,format=raw,readonly=on,file="$code" \
     -drive if=ide,file=fat:rw:build/uefi/esp,format=raw \
+    -device qemu-xhci \
+    -device usb-tablet \
     -serial vc \
     -monitor none \
     -no-reboot

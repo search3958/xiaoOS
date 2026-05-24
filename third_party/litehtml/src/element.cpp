@@ -490,6 +490,7 @@ bool element::on_lbutton_up(const bool /*is_click*/)								LITEHTML_RETURN_FUNC
 bool element::set_pseudo_class( string_id /*cls*/, bool /*add*/ )					LITEHTML_RETURN_FUNC(false)
 bool element::set_class( const char* /*pclass*/, bool /*add*/ )						LITEHTML_RETURN_FUNC(false)
 bool element::is_replaced() const													LITEHTML_RETURN_FUNC(false)
+bool element::get_custom_property(string_id /*name*/, css_token_vector& /*result*/) const LITEHTML_RETURN_FUNC(false)
 void element::draw(uint_ptr /*hdc*/, pixel_t /*x*/, pixel_t /*y*/, const position */*clip*/, const std::shared_ptr<render_item> &/*ri*/) LITEHTML_EMPTY_FUNC
 void element::draw_background(uint_ptr /*hdc*/, pixel_t /*x*/, pixel_t /*y*/, const position */*clip*/, const std::shared_ptr<render_item> &/*ri*/) LITEHTML_EMPTY_FUNC
 void element::get_text( string& /*text*/ ) const									LITEHTML_EMPTY_FUNC

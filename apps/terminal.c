@@ -16,12 +16,14 @@ extern "C" void esp_restart(void);
 #define TERM_PROMPT_COLOR 0x8FA4BAu
 #define TERM_INPUT_COLOR 0xFFCB52u
 #define TERM_CURSOR_COLOR 0xE8EEF6u
+#define TERM_PROMPT_STR "> "
 #define TTF_ARENA_SIZE (128 * 1024)
 #define TERM_FP_SHIFT 16
 #define TERM_FP_ONE (1 << TERM_FP_SHIFT)
 
 enum {
     TERM_ACTION_NONE = 0,
+    TERM_ACTION_MODE_SWITCH = 1,
     TERM_ACTION_REBOOT = 2,
     TERM_ACTION_SHUTDOWN = 3
 };
@@ -344,14 +346,24 @@ static void cli_mark_history_line_dirty(cli_term_state *st, int history_index) {
     cli_mark_output_row_dirty(st, row);
 }
 
+static int cli_input_logical_index(cli_term_state *st) {
+    int last;
+    int slot;
+    if (!st || st->line_count <= 0) return 0;
+    last = st->line_count - 1;
+    slot = term_line_slot(st, last);
+    if (st->line_len[slot] == 0) return last;
+    return st->line_count;
+}
+
 static void cli_mark_input_line_dirty(cli_term_state *st) {
-    int row = st->line_count - st->view_start;
+    int row = cli_input_logical_index(st) - st->view_start;
     cli_mark_output_row_dirty(st, row);
 }
 
 static int cli_sync_view(cli_term_state *st) {
     int old = st->view_start;
-    int total_lines = st->line_count + 1;
+    int total_lines = cli_input_logical_index(st) + 1;
     int max_start = total_lines - st->output_rows;
     if (max_start < 0) max_start = 0;
     st->view_start = max_start;
@@ -638,10 +650,12 @@ static void render_output_row(cli_term_state *st, int row) {
     int y;
     int h;
     int idx;
+    int input_idx;
     y = output_y_for_row(st, row);
     h = st->line_height;
     idx = st->view_start + row;
-    if (idx >= 0 && idx < st->line_count) {
+    input_idx = cli_input_logical_index(st);
+    if (idx >= 0 && idx < st->line_count && idx != input_idx) {
         int slot = term_line_slot(st, idx);
         int new_len = st->line_len[slot];
         int old_len = st->row_cache_len[row];
@@ -674,8 +688,8 @@ static void render_output_row(cli_term_state *st, int row) {
         term_copy_cstr_cap(st->row_cache_text[row], TERM_LINE_MAX, st->lines[slot], &st->row_cache_len[row]);
         return;
     }
-    if (idx == st->line_count) {
-        int prompt_x = TERM_MARGIN + text_width_n(st, ">", -1);
+    if (idx == input_idx) {
+        int prompt_x = TERM_MARGIN + text_width_n(st, TERM_PROMPT_STR, -1);
         int old_width = text_width_n(st, st->row_cache_text[row], st->row_cache_len[row]);
         int new_width = text_width(st, st->input);
         int prefix = st->row_cache_kind[row] == TERM_ROW_KIND_INPUT ? common_prefix_len(st->row_cache_text[row], st->input) : 0;
@@ -691,7 +705,7 @@ static void render_output_row(cli_term_state *st, int row) {
 
         if (!st->input_row_init || st->row_cache_kind[row] != TERM_ROW_KIND_INPUT) {
             xiao_video_fill_rect_rgb888(st->env, 0, y, st->screen_w, h, TERM_BG_COLOR);
-            draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
+            draw_text(st, TERM_MARGIN, y, TERM_PROMPT_STR, TERM_PROMPT_COLOR);
             draw_text(st, prompt_x, y, st->input, TERM_INPUT_COLOR);
             st->input_row_init = 1;
         } else {
@@ -699,12 +713,18 @@ static void render_output_row(cli_term_state *st, int row) {
             if (clear_end < redraw_x + 12) clear_end = redraw_x + 12;
             if (clear_end > st->screen_w) clear_end = st->screen_w;
             xiao_video_fill_rect_rgb888(st->env, redraw_x, y, clear_end - redraw_x, h, TERM_BG_COLOR);
-            draw_text(st, TERM_MARGIN, y, ">", TERM_PROMPT_COLOR);
+            draw_text(st, TERM_MARGIN, y, TERM_PROMPT_STR, TERM_PROMPT_COLOR);
             draw_text_from_index(st, prompt_x, y, st->input, redraw_from, TERM_INPUT_COLOR);
         }
 
         cursor_x = prompt_x + new_width;
-        xiao_video_fill_rect_rgb888(st->env, cursor_x, y + h - 4, 10, 2, TERM_CURSOR_COLOR);
+        {
+            int cursor_y = y + 3;
+            int cursor_h = h - 6;
+            if (cursor_h < 10) cursor_h = 10;
+            if (cursor_y + cursor_h > st->screen_h) cursor_h = st->screen_h - cursor_y;
+            if (cursor_h > 0) xiao_video_fill_rect_rgb888(st->env, cursor_x, cursor_y, 2, cursor_h, TERM_CURSOR_COLOR);
+        }
         st->cursor_prev_x = cursor_x;
         st->prev_input_len = st->input_len;
         term_copy_cstr_cap(st->prev_input, TERM_INPUT_MAX + 1, st->input, 0);
@@ -773,6 +793,7 @@ static int run_text_terminal(xiao_env *env) {
     char line[128];
     xiao_size n = 0;
     int action = TERM_ACTION_NONE;
+    int run_mode = xiao_mode_get();
 
     xiao_console_print(env, "xiao terminal ready\r\n");
     xiao_console_print(env, "type command (example: ls, cat readme.txt), or 'exit'\r\n");
@@ -819,6 +840,10 @@ static int run_text_terminal(xiao_env *env) {
             xiao_console_print(env, line);
             xiao_console_print(env, "\r\n");
         }
+
+        if (xiao_mode_get() != run_mode) {
+            return TERM_ACTION_MODE_SWITCH;
+        }
     }
 
     xiao_console_print(env, "terminal closed\r\n");
@@ -838,6 +863,7 @@ static int run_cli_terminal(xiao_env *env) {
     int descent = 0;
     int line_gap = 0;
     int action = TERM_ACTION_NONE;
+    int run_mode = xiao_mode_get();
     cli_term_state *st = &cli_state;
 
     if (xiao_platform(env) != XIAO_PLATFORM_ESP32) {
@@ -892,7 +918,7 @@ static int run_cli_terminal(xiao_env *env) {
 
         if (ch == '\r' || ch == '\n') {
             st->input[st->input_len] = 0;
-            cli_feed_output(st, "> ", 2);
+            cli_feed_output(st, TERM_PROMPT_STR, xstrlen(TERM_PROMPT_STR));
             cli_feed_output(st, st->input, xstrlen(st->input));
             cli_feed_output(st, "\n", 1);
 
@@ -906,6 +932,12 @@ static int run_cli_terminal(xiao_env *env) {
                     cli_feed_output(st, "\n", 1);
                 }
             }
+
+            if (xiao_mode_get() != run_mode) {
+                action = TERM_ACTION_MODE_SWITCH;
+                break;
+            }
+
             st->input_len = 0;
             st->input[0] = 0;
             st->input_dirty = 1;
@@ -957,6 +989,7 @@ int xiao_app_entry(xiao_env *env) {
 
     while (1) {
         int rc;
+        mode = xiao_mode_get();
         if (mode == XIAO_MODE_TEXT) {
             rc = run_text_terminal(env);
         } else {
@@ -965,6 +998,15 @@ int xiao_app_entry(xiao_env *env) {
                 warned_gui = 1;
             }
             rc = run_cli_terminal(env);
+        }
+
+        if (rc == TERM_ACTION_MODE_SWITCH) {
+            if (xiao_mode_get() == XIAO_MODE_TEXT) {
+                xiao_console_print(env, "\x1b[2J\x1b[H");
+            } else {
+                xiao_video_fill_rgb888(env, TERM_BG_COLOR);
+            }
+            continue;
         }
 
         if (rc == TERM_ACTION_REBOOT) {

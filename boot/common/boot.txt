@@ -4,5 +4,5 @@ exec hello
 wait 100
 exec mode cli
 exec nihao
-exec xuexi
+exec terminal
 wait forever

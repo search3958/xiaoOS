@@ -177,7 +177,7 @@ static const char boot_text[] =
     "wait 100\n"
     "exec terminal\n"
     "exec nihao\n"
-    "exec xuexi\n"
+    "exec terminal\n"
     "wait forever\n"
     ;
 

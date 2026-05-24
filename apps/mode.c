@@ -48,14 +48,5 @@ int xiao_app_entry(xiao_env *env) {
     xiao_console_print(env, "mode switched to ");
     xiao_console_print(env, mode_name(mode));
     xiao_console_print(env, "\r\n");
-
-    {
-        const char *argv_text[] = { "terminal", "-m", "text" };
-        const char *argv_cli[] = { "terminal", "-m", "cli" };
-        const char *argv_gui[] = { "terminal", "-m", "gui" };
-
-        if (mode == XIAO_MODE_TEXT) return xiao_exec_app_args("terminal", 3, argv_text);
-        if (mode == XIAO_MODE_CLI) return xiao_exec_app_args("terminal", 3, argv_cli);
-        return xiao_exec_app_args("terminal", 3, argv_gui);
-    }
+    return 0;
 }

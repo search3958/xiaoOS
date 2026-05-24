@@ -1,0 +1,3 @@
+# BIOS image size is limited to 64 KiB stage2 payload.
+# Exclude large assets only needed for CLI TTF renderer.
+IBMPlexMono-Regular.ttf

@@ -1,0 +1,8 @@
+# xiaoOS boot text
+exec clear
+exec hello
+wait 100
+exec mode cli
+exec nihao
+exec xuexi
+wait forever

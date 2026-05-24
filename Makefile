@@ -1,11 +1,22 @@
 BUILD := build
 PYTHON := python3
 
-BIOS_CC := x86_64-elf-gcc
-BIOS_OBJCOPY := x86_64-elf-objcopy
-CLANG := clang
-LLD_LINK := lld-link
-NASM := nasm
+# Tool auto-detection (Linux/macOS). You can still override via env, e.g. CLANG=clang-18.
+detect_tool = $(firstword $(foreach bin,$(1),$(if $(shell command -v $(bin) 2>/dev/null),$(bin))))
+
+BIOS_CC ?= $(call detect_tool,x86_64-elf-gcc i686-elf-gcc gcc)
+BIOS_OBJCOPY ?= $(call detect_tool,x86_64-elf-objcopy i686-elf-objcopy objcopy llvm-objcopy)
+CLANG ?= $(call detect_tool,clang clang-21 clang-20 clang-19 clang-18 clang-17 clang-16 clang-15)
+LLD_LINK_FRONTEND := $(call detect_tool,lld-link lld-link-21 lld-link-20 lld-link-19 lld-link-18 lld-link-17 lld-link-16 lld-link-15)
+LD_LLD := $(call detect_tool,ld.lld ld.lld-21 ld.lld-20 ld.lld-19 ld.lld-18 ld.lld-17 ld.lld-16 ld.lld-15)
+ifneq ($(strip $(LLD_LINK_FRONTEND)),)
+LLD_LINK_BIN := $(LLD_LINK_FRONTEND)
+LLD_LINK ?= $(LLD_LINK_FRONTEND)
+else
+LLD_LINK_BIN := $(LD_LLD)
+LLD_LINK ?= $(if $(strip $(LD_LLD)),$(LD_LLD) -flavor link,)
+endif
+NASM ?= $(call detect_tool,nasm)
 STAGE2_SECTORS := 128
 STAGE2_SIZE := 65536
 
@@ -23,7 +34,7 @@ ARM64_UEFI_CFLAGS := -target aarch64-unknown-windows -Iinclude -Iapps -Ihal/uefi
 
 .SECONDARY: $(WRAPPED_APP_SRCS)
 
-.PHONY: all pc bios uefi arm64 arduino esp32c3 esp32c3-upload esp32c3-monitor sync-sketches check clean FORCE
+.PHONY: all pc bios uefi arm64 arduino esp32c3 esp32c3-upload esp32c3-monitor sync-sketches check clean FORCE toolchain-check-bios toolchain-check-uefi
 
 all: pc
 
@@ -31,11 +42,46 @@ pc: bios uefi
 
 check: pc arm64
 
-bios: $(BUILD)/bios/xiao-bios.img
+bios: toolchain-check-bios $(BUILD)/bios/xiao-bios.img
 
-uefi: $(BUILD)/uefi/BOOTX64.EFI $(BUILD)/uefi/esp/EFI/BOOT/BOOTX64.EFI
+uefi: toolchain-check-uefi $(BUILD)/uefi/BOOTX64.EFI $(BUILD)/uefi/esp/EFI/BOOT/BOOTX64.EFI
 
-arm64: $(BUILD)/arm64/BOOTAA64.EFI $(BUILD)/arm64/esp/EFI/BOOT/BOOTAA64.EFI
+arm64: toolchain-check-uefi $(BUILD)/arm64/BOOTAA64.EFI $(BUILD)/arm64/esp/EFI/BOOT/BOOTAA64.EFI
+
+toolchain-check-bios:
+	@[ -n "$(strip $(NASM))" ] || { \
+		echo "Missing required tool: nasm" >&2; \
+		echo "Ubuntu/Debian: sudo apt install nasm" >&2; \
+		exit 127; \
+	}
+	@[ -n "$(strip $(BIOS_CC))" ] || { \
+		echo "No C compiler found for BIOS build." >&2; \
+		echo "Install x86_64-elf-gcc (recommended) or gcc with 32-bit support." >&2; \
+		echo "Ubuntu/Debian: sudo apt install gcc-multilib" >&2; \
+		exit 127; \
+	}
+	@[ -n "$(strip $(BIOS_OBJCOPY))" ] || { \
+		echo "Missing required tool: objcopy (or llvm-objcopy)." >&2; \
+		echo "Ubuntu/Debian: sudo apt install binutils" >&2; \
+		exit 127; \
+	}
+
+toolchain-check-uefi:
+	@[ -n "$(strip $(CLANG))" ] || { \
+		echo "Missing required tool: clang" >&2; \
+		echo "Ubuntu/Debian: sudo apt install clang lld nasm" >&2; \
+		exit 127; \
+	}
+	@[ -n "$(strip $(LLD_LINK_BIN))" ] || { \
+		echo "Missing required tool: lld-link (or ld.lld)." >&2; \
+		echo "Ubuntu/Debian: sudo apt install lld" >&2; \
+		exit 127; \
+	}
+	@[ -n "$(strip $(NASM))" ] || { \
+		echo "Missing required tool: nasm" >&2; \
+		echo "Ubuntu/Debian: sudo apt install nasm" >&2; \
+		exit 127; \
+	}
 
 $(BUILD)/bios $(BUILD)/uefi $(BUILD)/uefi/esp/EFI/BOOT $(BUILD)/arm64 $(BUILD)/arm64/esp/EFI/BOOT $(BUILD)/generated:
 	mkdir -p $@

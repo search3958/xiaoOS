@@ -12,18 +12,7 @@ detect_port() {
         printf '%s\n' "$PORT"
         return 0
     fi
-
-    for pattern in \
-        /dev/cu.usbmodem* \
-        /dev/cu.usbserial* \
-        /dev/cu.SLAB_USBtoUART* \
-        /dev/cu.wchusbserial* \
-        /dev/ttyUSB* \
-        /dev/ttyACM* \
-        /dev/tty.SLAB_USBtoUART* \
-        /dev/tty.wchusbserial* \
-        /dev/serial/by-id/*
-    do
+    for pattern in /dev/cu.usbmodem* /dev/cu.usbserial* /dev/cu.SLAB_USBtoUART* /dev/cu.wchusbserial*; do
         for port in $pattern; do
             if [ -e "$port" ]; then
                 printf '%s\n' "$port"
@@ -31,16 +20,14 @@ detect_port() {
             fi
         done
     done
-
-    echo "ESP32 serial port not found." >&2
-    echo "Set PORT=/dev/ttyUSB0 (Linux) or PORT=/dev/cu.usbmodem* (macOS) and retry." >&2
+    echo "ESP32-C3 serial port not found. Set PORT=/dev/cu.xxx and retry." >&2
     exit 1
 }
 
 require_arduino_cli() {
     if ! command -v arduino-cli >/dev/null 2>&1; then
         echo "arduino-cli is required." >&2
-        echo "Install arduino-cli and ensure it is in PATH." >&2
+        echo "Install on macOS: brew install arduino-cli" >&2
         echo "Then install ESP32 core:" >&2
         echo "arduino-cli config init" >&2
         echo "arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json" >&2

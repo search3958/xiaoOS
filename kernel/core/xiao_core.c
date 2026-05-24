@@ -185,6 +185,48 @@ static xiao_fs_node *xiao_fs_alloc_node(void) {
     return 0;
 }
 
+static void xiao_fs_recompute_ram_used(void) {
+    xiao_size i;
+    xiao_size used = 0;
+    for (i = 0; i < XIAO_FS_MAX_NODES; i++) {
+        xiao_size end;
+        if (!fs_nodes[i].used || fs_nodes[i].type != XIAO_FS_FILE || !fs_nodes[i].data || fs_nodes[i].capacity == 0) {
+            continue;
+        }
+        end = (xiao_size)(fs_nodes[i].data - fs_ram) + fs_nodes[i].capacity;
+        if (end > used) used = end;
+    }
+    fs_ram_used = used;
+}
+
+static char *xiao_fs_find_free_block(xiao_size size, const xiao_fs_node *exclude) {
+    xiao_size start = 0;
+    if (size == 0 || size > sizeof(fs_ram)) return 0;
+    while (start + size <= sizeof(fs_ram)) {
+        xiao_size i;
+        xiao_size next = sizeof(fs_ram);
+        int conflict = 0;
+        for (i = 0; i < XIAO_FS_MAX_NODES; i++) {
+            xiao_size node_start;
+            xiao_size node_end;
+            if (!fs_nodes[i].used || fs_nodes[i].type != XIAO_FS_FILE || !fs_nodes[i].data || fs_nodes[i].capacity == 0) {
+                continue;
+            }
+            if (&fs_nodes[i] == exclude) continue;
+            node_start = (xiao_size)(fs_nodes[i].data - fs_ram);
+            node_end = node_start + fs_nodes[i].capacity;
+            if (start < node_end && start + size > node_start) {
+                conflict = 1;
+                if (node_end < next) next = node_end;
+            }
+        }
+        if (!conflict) return fs_ram + start;
+        if (next <= start) break;
+        start = next;
+    }
+    return 0;
+}
+
 static int xiao_fs_ensure_dir_abs(const char *path) {
     char parent[XIAO_FS_MAX_PATH];
     xiao_fs_node *node = xiao_fs_find_abs(path);
@@ -203,6 +245,7 @@ static int xiao_fs_ensure_dir_abs(const char *path) {
 static int xiao_fs_write_abs(const char *path, const char *data, xiao_size size) {
     char parent[XIAO_FS_MAX_PATH];
     xiao_fs_node *node = xiao_fs_find_abs(path);
+    char *block;
     if (!node) {
         xiao_path_parent(parent, sizeof(parent), path);
         if (xiao_fs_ensure_dir_abs(parent) != 0) return -1;
@@ -212,16 +255,51 @@ static int xiao_fs_write_abs(const char *path, const char *data, xiao_size size)
         node->type = XIAO_FS_FILE;
     }
     if (node->type != XIAO_FS_FILE) return -1;
-    if (node->capacity < size) {
-        if (fs_ram_used + size > sizeof(fs_ram)) return -1;
-        node->data = fs_ram + fs_ram_used;
+    if (size == 0) {
+        node->data = 0;
+        node->size = 0;
+        node->capacity = 0;
+        node->ro_data = 0;
+        node->ro_size = 0;
+        xiao_fs_recompute_ram_used();
+        return 0;
+    }
+    if (!node->data || node->capacity < size) {
+        block = xiao_fs_find_free_block(size, node);
+        if (!block) return -1;
+        node->data = block;
         node->capacity = size;
-        fs_ram_used += size;
     }
     if (size) xiao_memcpy(node->data, data, size);
     node->size = size;
+    if (node->capacity > size) node->capacity = size;
     node->ro_data = 0;
     node->ro_size = 0;
+    xiao_fs_recompute_ram_used();
+    return 0;
+}
+
+static int xiao_fs_clone_file_abs(const char *dst_path, xiao_fs_node *src) {
+    char parent[XIAO_FS_MAX_PATH];
+    xiao_fs_node *dst;
+    if (!src || src->type != XIAO_FS_FILE || xiao_fs_find_abs(dst_path)) return -1;
+    xiao_path_parent(parent, sizeof(parent), dst_path);
+    if (xiao_fs_ensure_dir_abs(parent) != 0) return -1;
+    dst = xiao_fs_alloc_node();
+    if (!dst) return -1;
+    dst->type = XIAO_FS_FILE;
+    xiao_strcpy_cap(dst->path, sizeof(dst->path), dst_path);
+    if (!src->data) {
+        dst->ro_data = src->ro_data;
+        dst->ro_size = src->ro_size;
+        return 0;
+    }
+    if (src->size == 0) return 0;
+    if (xiao_fs_write_abs(dst_path, src->data, src->size) != 0) {
+        dst->used = 0;
+        xiao_fs_recompute_ram_used();
+        return -1;
+    }
     return 0;
 }
 
@@ -642,6 +720,7 @@ int xiao_fs_remove(const char *path) {
             fs_nodes[i].used = 0;
         }
     }
+    xiao_fs_recompute_ram_used();
     if (xiao_starts_with_path(fs_cwd, abs) && (fs_cwd[len] == 0 || fs_cwd[len] == '/')) {
         xiao_strcpy_cap(fs_cwd, sizeof(fs_cwd), "/");
     }
@@ -691,9 +770,7 @@ int xiao_fs_copy(const char *src_path, const char *dst_path) {
     src_len = xiao_strlen(src_abs);
     if (xiao_starts_with_path(dst_abs, src_abs) && (dst_abs[src_len] == 0 || dst_abs[src_len] == '/')) return -1;
 
-    if (src->type == XIAO_FS_FILE) {
-        return xiao_fs_write_abs(dst_abs, xiao_fs_node_data(src), xiao_fs_node_size(src));
-    }
+    if (src->type == XIAO_FS_FILE) return xiao_fs_clone_file_abs(dst_abs, src);
     if (src->type != XIAO_FS_DIR || xiao_fs_ensure_dir_abs(dst_abs) != 0) return -1;
 
     for (i = 0; i < XIAO_FS_MAX_NODES; i++) {
@@ -708,7 +785,7 @@ int xiao_fs_copy(const char *src_path, const char *dst_path) {
         if (fs_nodes[i].type == XIAO_FS_DIR) {
             if (xiao_fs_ensure_dir_abs(merged) != 0) return -1;
         } else if (fs_nodes[i].type == XIAO_FS_FILE) {
-            if (xiao_fs_write_abs(merged, xiao_fs_node_data(&fs_nodes[i]), xiao_fs_node_size(&fs_nodes[i])) != 0) return -1;
+            if (xiao_fs_clone_file_abs(merged, &fs_nodes[i]) != 0) return -1;
         }
     }
     return 0;

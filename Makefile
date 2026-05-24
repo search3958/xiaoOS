@@ -176,7 +176,7 @@ sync-sketches:
 
 arduino: sync-sketches
 	@command -v arduino-cli >/dev/null || { echo "arduino-cli is required for this target"; exit 127; }
-	arduino-cli compile --fqbn arduino:avr:uno hal/arduino/xiaoOS
+	arduino-cli compile --fqbn arduino:avr:uno --build-property build.extra_flags="-DXIAO_TTF_TERMINAL_DISABLED" hal/arduino/xiaoOS
 
 esp32c3:
 	./esp32c3.sh compile

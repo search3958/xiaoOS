@@ -6,6 +6,12 @@ cd "$(dirname "$0")"
 FQBN="${FQBN:-esp32:esp32:esp32s3:CDCOnBoot=cdc}"
 BAUD="${BAUD:-115200}"
 ACTION="${1:-upload-monitor}"
+BASE_EXTRA_FLAGS="-DXIAO_TTF_TERMINAL_DISABLED"
+if [ -n "${EXTRA_FLAGS:-}" ]; then
+    BUILD_EXTRA_FLAGS="$BASE_EXTRA_FLAGS $EXTRA_FLAGS"
+else
+    BUILD_EXTRA_FLAGS="$BASE_EXTRA_FLAGS"
+fi
 
 resolve_arduino_cli() {
     if [ -n "${ARDUINO_CLI:-}" ] && [ -x "${ARDUINO_CLI}" ]; then
@@ -75,12 +81,12 @@ python3 tools/sync_sketch.py hal/esp32c3/xiaoOS
 
 case "$ACTION" in
     compile)
-        "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" hal/esp32c3/xiaoOS
+        "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property build.extra_flags="$BUILD_EXTRA_FLAGS" hal/esp32c3/xiaoOS
         ;;
     upload)
         port="$(detect_port)"
         echo "Using $port with $FQBN"
-        "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --upload -p "$port" hal/esp32c3/xiaoOS
+        "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property build.extra_flags="$BUILD_EXTRA_FLAGS" --upload -p "$port" hal/esp32c3/xiaoOS
         ;;
     monitor)
         port="$(detect_port)"
@@ -90,7 +96,7 @@ case "$ACTION" in
     upload-monitor)
         port="$(detect_port)"
         echo "Using $port with $FQBN"
-        "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --upload -p "$port" hal/esp32c3/xiaoOS
+        "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --build-property build.extra_flags="$BUILD_EXTRA_FLAGS" --upload -p "$port" hal/esp32c3/xiaoOS
         "$ARDUINO_CLI_BIN" monitor -p "$port" -c baudrate="$BAUD"
         ;;
     *)

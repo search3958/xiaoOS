@@ -87,8 +87,10 @@ exec qemu-system-aarch64 \
     -device qemu-xhci \
     -device usb-kbd \
     -device usb-tablet \
+    -device usb-mouse \
     -device virtio-keyboard-device \
     -device virtio-tablet-device \
+    -device virtio-mouse-device \
     -bios "$code" \
     -drive if=none,id=hd0,file=fat:rw:build/arm64/esp,format=raw \
     -device virtio-blk-device,drive=hd0 \

@@ -16,10 +16,12 @@ static int esc_state;
 static EFI_GRAPHICS_OUTPUT_PROTOCOL *gop;
 static int gop_mode_ready;
 static EFI_SIMPLE_POINTER_PROTOCOL *simple_pointer;
+static EFI_ABSOLUTE_POINTER_PROTOCOL *absolute_pointer;
 static int pointer_ready;
 static int pointer_x;
 static int pointer_y;
 static int pointer_buttons;
+static int pointer_kind;
 int _fltused = 0;
 
 typedef enum {
@@ -59,6 +61,9 @@ static const EFI_GUID gop_guid = {
 };
 static const EFI_GUID simple_pointer_guid = {
     0x31878c87, 0x0b75, 0x11d5, {0x9a, 0x4f, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d}
+};
+static const EFI_GUID absolute_pointer_guid = {
+    0x8d59d32b, 0xc655, 0x4ae9, {0x9b, 0x15, 0xf2, 0x59, 0x04, 0x99, 0x2a, 0x43}
 };
 
 typedef struct {
@@ -188,6 +193,13 @@ static EFI_SIMPLE_POINTER_PROTOCOL *uefi_get_simple_pointer(void) {
     if (!st || !st->BootServices || !st->BootServices->LocateProtocol) return 0;
     if (st->BootServices->LocateProtocol((EFI_GUID *)&simple_pointer_guid, 0, (void **)&simple_pointer) != EFI_SUCCESS) return 0;
     return simple_pointer;
+}
+
+static EFI_ABSOLUTE_POINTER_PROTOCOL *uefi_get_absolute_pointer(void) {
+    if (absolute_pointer) return absolute_pointer;
+    if (!st || !st->BootServices || !st->BootServices->LocateProtocol) return 0;
+    if (st->BootServices->LocateProtocol((EFI_GUID *)&absolute_pointer_guid, 0, (void **)&absolute_pointer) != EFI_SUCCESS) return 0;
+    return absolute_pointer;
 }
 
 static UINT32 uefi_pick_best_graphics_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *ggop) {
@@ -486,15 +498,32 @@ static int uefi_video_fill_rgb888(unsigned int rgb888) {
     return uefi_video_fill_rect_rgb888(0, 0, w, h, rgb888);
 }
 
+static int uefi_map_abs_to_screen(UINT64 current, UINT64 minv, UINT64 maxv, int screen_max) {
+    UINT64 clamped;
+    UINT64 range;
+    UINT64 num;
+    if (screen_max <= 0) return 0;
+    if (maxv <= minv) return 0;
+    clamped = current;
+    if (clamped < minv) clamped = minv;
+    if (clamped > maxv) clamped = maxv;
+    range = maxv - minv;
+    num = clamped - minv;
+    return (int)((num * (UINT64)(screen_max - 1)) / range);
+}
+
 static int uefi_pointer_read(int *x, int *y, int *buttons) {
     EFI_SIMPLE_POINTER_PROTOCOL *ptr;
+    EFI_ABSOLUTE_POINTER_PROTOCOL *aptr;
     EFI_SIMPLE_POINTER_STATE state;
+    EFI_ABSOLUTE_POINTER_STATE astate;
     int sw = 0;
     int sh = 0;
 
     if (uefi_prepare_gop() != 0) return -1;
     ptr = uefi_get_simple_pointer();
-    if (!ptr || !ptr->GetState) return -1;
+    aptr = uefi_get_absolute_pointer();
+    if ((!ptr || !ptr->GetState) && (!aptr || !aptr->GetState || !aptr->Mode)) return -1;
 
     if (!pointer_ready) {
         if (uefi_video_size(&sw, &sh) == 0) {
@@ -506,31 +535,58 @@ static int uefi_pointer_read(int *x, int *y, int *buttons) {
         }
         pointer_buttons = 0;
         pointer_ready = 1;
-        if (ptr->Reset) ptr->Reset(ptr, 0);
+        pointer_kind = 0;
     }
 
-    if (ptr->GetState(ptr, &state) == EFI_SUCCESS) {
-        int dx = state.RelativeMovementX;
-        int dy = state.RelativeMovementY;
-        if (dx > 48) dx = 48;
-        if (dx < -48) dx = -48;
-        if (dy > 48) dy = 48;
-        if (dy < -48) dy = -48;
-        pointer_x += dx;
-        pointer_y += dy;
-        pointer_buttons = (state.LeftButton ? 1 : 0) | (state.RightButton ? 2 : 0);
-
-        if (uefi_video_size(&sw, &sh) == 0) {
-            if (pointer_x < 0) pointer_x = 0;
-            if (pointer_y < 0) pointer_y = 0;
-            if (pointer_x >= sw) pointer_x = sw - 1;
-            if (pointer_y >= sh) pointer_y = sh - 1;
+    if (ptr && ptr->GetState) {
+        if (pointer_kind != 1) {
+            if (ptr->Reset) ptr->Reset(ptr, 0);
+            pointer_kind = 1;
         }
+        if (ptr->GetState(ptr, &state) == EFI_SUCCESS) {
+            int dx = state.RelativeMovementX;
+            int dy = state.RelativeMovementY;
+            if (dx > 48) dx = 48;
+            if (dx < -48) dx = -48;
+            if (dy > 48) dy = 48;
+            if (dy < -48) dy = -48;
+            pointer_x += dx;
+            pointer_y += dy;
+            pointer_buttons = (state.LeftButton ? 1 : 0) | (state.RightButton ? 2 : 0);
 
-        if (x) *x = pointer_x;
-        if (y) *y = pointer_y;
-        if (buttons) *buttons = pointer_buttons;
-        return 1;
+            if (uefi_video_size(&sw, &sh) == 0) {
+                if (pointer_x < 0) pointer_x = 0;
+                if (pointer_y < 0) pointer_y = 0;
+                if (pointer_x >= sw) pointer_x = sw - 1;
+                if (pointer_y >= sh) pointer_y = sh - 1;
+            }
+
+            if (x) *x = pointer_x;
+            if (y) *y = pointer_y;
+            if (buttons) *buttons = pointer_buttons;
+            return 1;
+        }
+    }
+
+    if (aptr && aptr->GetState && aptr->Mode) {
+        if (pointer_kind != 2) {
+            if (aptr->Reset) aptr->Reset(aptr, 0);
+            pointer_kind = 2;
+        }
+        if (aptr->GetState(aptr, &astate) == EFI_SUCCESS) {
+            if (uefi_video_size(&sw, &sh) == 0) {
+                pointer_x = uefi_map_abs_to_screen(astate.CurrentX, aptr->Mode->AbsoluteMinX, aptr->Mode->AbsoluteMaxX, sw);
+                pointer_y = uefi_map_abs_to_screen(astate.CurrentY, aptr->Mode->AbsoluteMinY, aptr->Mode->AbsoluteMaxY, sh);
+            } else {
+                pointer_x = 0;
+                pointer_y = 0;
+            }
+            pointer_buttons = (astate.ActiveButtons & 1u ? 1 : 0) | (astate.ActiveButtons & 2u ? 2 : 0);
+            if (x) *x = pointer_x;
+            if (y) *y = pointer_y;
+            if (buttons) *buttons = pointer_buttons;
+            return 1;
+        }
     }
 
     if (x) *x = pointer_x;

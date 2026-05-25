@@ -512,6 +512,7 @@ void xiao_console_print(xiao_env *env, const char *text) {
 }
 
 void xiao_console_write(xiao_env *env, const char *data, xiao_size len) {
+    if (xiao_mode == XIAO_MODE_GUI) return;
     if (console_sink && console_sink(console_sink_ctx, data, len)) return;
     if (env && env->hal && env->hal->console_write) {
         env->hal->console_write(data, len);
@@ -519,6 +520,7 @@ void xiao_console_write(xiao_env *env, const char *data, xiao_size len) {
 }
 
 int xiao_input_read(xiao_env *env) {
+    if (xiao_mode == XIAO_MODE_GUI) return -1;
     if (env && env->hal && env->hal->input_read) return env->hal->input_read();
     return -1;
 }

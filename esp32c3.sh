@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 FQBN="${FQBN:-esp32:esp32:esp32s3:CDCOnBoot=cdc}"
 BAUD="${BAUD:-115200}"
 ACTION="${1:-upload-monitor}"
-DEFAULT_EXTRA_FLAGS="-I$PWD/third_party/litehtml/include -I$PWD/third_party/litehtml/include/litehtml -I$PWD/third_party/litehtml/src -I$PWD/third_party/litehtml/src/gumbo -I$PWD/third_party/litehtml/src/gumbo/include -I$PWD/third_party/litehtml/src/gumbo/include/gumbo"
+DEFAULT_EXTRA_FLAGS="-DXIAO_TTF_TERMINAL_DISABLED -I$PWD/include -I$PWD/apps -I$PWD/third_party/litehtml/include -I$PWD/third_party/litehtml/include/litehtml -I$PWD/third_party/litehtml/src -I$PWD/third_party/litehtml/src/gumbo -I$PWD/third_party/litehtml/src/gumbo/include -I$PWD/third_party/litehtml/src/gumbo/include/gumbo"
 DEFAULT_CPP_EXTRA_FLAGS=""
 if [ -n "${EXTRA_FLAGS:-}" ]; then
     BUILD_EXTRA_FLAGS="$DEFAULT_EXTRA_FLAGS $EXTRA_FLAGS"
@@ -45,6 +45,7 @@ detect_port() {
     fi
 
     for pattern in \
+        /dev/serial/by-id/* \
         /dev/cu.usbmodem* \
         /dev/cu.usbserial* \
         /dev/cu.SLAB_USBtoUART* \
@@ -52,8 +53,7 @@ detect_port() {
         /dev/ttyUSB* \
         /dev/ttyACM* \
         /dev/tty.SLAB_USBtoUART* \
-        /dev/tty.wchusbserial* \
-        /dev/serial/by-id/*
+        /dev/tty.wchusbserial*
     do
         for port in $pattern; do
             if [ -e "$port" ]; then
@@ -66,6 +66,56 @@ detect_port() {
     echo "ESP32 serial port not found." >&2
     echo "Set PORT=/dev/ttyUSB0 (Linux) or PORT=/dev/cu.usbmodem* (macOS) and retry." >&2
     exit 1
+}
+
+release_stale_monitor() {
+    port="$1"
+    if ! command -v lsof >/dev/null 2>&1; then
+        return 0
+    fi
+
+    pids="$(lsof -t "$port" 2>/dev/null || true)"
+    [ -n "$pids" ] || return 0
+
+    for pid in $pids; do
+        comm="$(ps -p "$pid" -o comm= 2>/dev/null | tr -d '[:space:]' || true)"
+        if [ "$comm" = "serial-monitor" ]; then
+            echo "Releasing stale serial monitor on $port (pid $pid)"
+            kill "$pid" 2>/dev/null || true
+            sleep 1
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        fi
+    done
+}
+
+run_monitor() {
+    port="$1"
+    if python3 - <<'PY' >/dev/null 2>&1
+import importlib.util, sys
+sys.exit(0 if importlib.util.find_spec("serial.tools.miniterm") else 1)
+PY
+    then
+        echo "Starting pyserial miniterm on $port at $BAUD baud"
+        exec python3 -m serial.tools.miniterm "$port" "$BAUD" --raw --dtr 0 --rts 0
+    fi
+
+    if "$ARDUINO_CLI_BIN" monitor -p "$port" -c baudrate="$BAUD"; then
+        return 0
+    fi
+
+    echo "monitor failed and no fallback available (install pyserial)" >&2
+    return 1
+}
+
+force_run_application() {
+    port="$1"
+    esptool_bin="$(find "$HOME/.arduino15/packages/esp32/tools/esptool_py" -type f -name esptool 2>/dev/null | sort | tail -n 1)"
+    if [ -z "$esptool_bin" ] || [ ! -x "$esptool_bin" ]; then
+        return 0
+    fi
+    "$esptool_bin" --chip esp32s3 --port "$port" --before no-reset --after watchdog-reset run >/dev/null 2>&1 || true
 }
 
 require_arduino_cli() {
@@ -101,6 +151,7 @@ case "$ACTION" in
         ;;
     upload)
         port="$(detect_port)"
+        release_stale_monitor "$port"
         echo "Using $port with $FQBN"
         if [ -n "$BUILD_EXTRA_FLAGS" ] || [ -n "$BUILD_CPP_EXTRA_FLAGS" ]; then
             if [ -n "$BUILD_EXTRA_FLAGS" ] && [ -n "$BUILD_CPP_EXTRA_FLAGS" ]; then
@@ -113,14 +164,17 @@ case "$ACTION" in
         else
             "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --upload -p "$port" hal/esp32c3/xiaoOS
         fi
+        force_run_application "$port"
         ;;
     monitor)
         port="$(detect_port)"
+        release_stale_monitor "$port"
         echo "Using $port at $BAUD baud"
-        "$ARDUINO_CLI_BIN" monitor -p "$port" -c baudrate="$BAUD"
+        run_monitor "$port"
         ;;
     upload-monitor)
         port="$(detect_port)"
+        release_stale_monitor "$port"
         echo "Using $port with $FQBN"
         if [ -n "$BUILD_EXTRA_FLAGS" ] || [ -n "$BUILD_CPP_EXTRA_FLAGS" ]; then
             if [ -n "$BUILD_EXTRA_FLAGS" ] && [ -n "$BUILD_CPP_EXTRA_FLAGS" ]; then
@@ -133,7 +187,8 @@ case "$ACTION" in
         else
             "$ARDUINO_CLI_BIN" compile --fqbn "$FQBN" --upload -p "$port" hal/esp32c3/xiaoOS
         fi
-        "$ARDUINO_CLI_BIN" monitor -p "$port" -c baudrate="$BAUD"
+        force_run_application "$port"
+        run_monitor "$port"
         ;;
     *)
         echo "usage: ./esp32c3.sh [compile|upload|monitor|upload-monitor]" >&2

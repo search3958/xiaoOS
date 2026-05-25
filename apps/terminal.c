@@ -980,10 +980,11 @@ int xiao_app_entry(xiao_env *env) {
         mode = xiao_mode_get();
         if (mode == XIAO_MODE_TEXT) {
             rc = run_text_terminal(env);
-        } else if (mode == XIAO_MODE_GUI) {
-            return 0;
         } else {
-            (void)warned_gui;
+            if (mode == XIAO_MODE_GUI && !warned_gui) {
+                xiao_console_print(env, "terminal: gui mode is reserved for later, using cli renderer\r\n");
+                warned_gui = 1;
+            }
             rc = run_cli_terminal(env);
         }
 

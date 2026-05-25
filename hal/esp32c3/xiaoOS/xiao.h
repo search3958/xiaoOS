@@ -50,7 +50,6 @@ typedef struct {
     int (*video_set_mode)(int w, int h);
     int platform;
     int (*video_blit_rgb888)(int x, int y, int w, int h, const unsigned int *pixels, int stride);
-    int (*pointer_read)(int *x, int *y, int *buttons);
 } xiao_hal;
 
 struct xiao_env {
@@ -115,7 +114,6 @@ int xiao_video_fill_rect_rgb888(xiao_env *env, int x, int y, int w, int h, unsig
 int xiao_video_size(xiao_env *env, int *w, int *h);
 int xiao_video_set_mode(xiao_env *env, int w, int h);
 int xiao_video_blit_rgb888(xiao_env *env, int x, int y, int w, int h, const unsigned int *pixels, int stride);
-int xiao_pointer_read(xiao_env *env, int *x, int *y, int *buttons);
 int xiao_platform(xiao_env *env);
 int xiao_mode_get(void);
 int xiao_mode_set(int mode);

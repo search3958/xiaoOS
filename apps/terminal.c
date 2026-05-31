@@ -844,6 +844,8 @@ static int run_cli_terminal(xiao_env *env) {
     return run_text_terminal(env);
 }
 #else
+#include "gui_proto.h"
+
 static int run_cli_terminal(xiao_env *env) {
     const char *font_data = 0;
     xiao_size font_size = 0;
@@ -853,6 +855,7 @@ static int run_cli_terminal(xiao_env *env) {
     int action = TERM_ACTION_NONE;
     int run_mode = xiao_mode_get();
     cli_term_state *st = &cli_state;
+    xiao_ipc_message msg;
 
     if (xiao_platform(env) != XIAO_PLATFORM_ESP32) {
         xiao_video_set_mode(env, 1280, 720);
@@ -898,6 +901,16 @@ static int run_cli_terminal(xiao_env *env) {
     cli_render_dirty(st);
 
     while (1) {
+        if (xiao_mode_get() == XIAO_MODE_GUI) {
+            if (xiao_ipc_receive(&msg) == 0 && msg.type == GUI_CMD_FRAME_READY) {
+                int sw, sh;
+                xiao_video_size(env, &sw, &sh);
+                xiao_video_blit_rgb888(env, 0, 0, sw, sh, (unsigned int *)msg.data, sw);
+            }
+            xiao_wait(env, 10);
+            continue;
+        }
+
         int ch = xiao_input_read(env);
         if (ch < 0) {
             xiao_wait(env, 10);
@@ -957,6 +970,7 @@ static int run_cli_terminal(xiao_env *env) {
     return TERM_ACTION_NONE;
 }
 #endif
+
 
 int xiao_app_entry(xiao_env *env) {
     int mode = xiao_mode_get();

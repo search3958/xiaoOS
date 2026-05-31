@@ -8,7 +8,7 @@
 typedef struct {
     int active;
     int w, h;
-    unsigned int *buffer;
+    unsigned int buffer[MAX_LAYER_W * MAX_LAYER_H / 8]; // 各レイヤーのバッファを静的に確保
 } Layer;
 
 static Layer layers[MAX_LAYERS];
@@ -19,15 +19,16 @@ int xiao_app_entry(xiao_env *env) {
     
     while (1) {
         if (xiao_ipc_receive(&msg) == 0) {
+            xiao_console_print(env, "GUI_SERVER: Got msg\n");
             GuiCommand *cmd = (GuiCommand *)msg.data;
             
             if (cmd->type == GUI_CMD_CREATE_LAYER) {
+                xiao_console_print(env, "GUI_SERVER: CreateLayer\n");
                 for (int i = 0; i < MAX_LAYERS; i++) {
                     if (!layers[i].active) {
                         layers[i].active = 1;
                         layers[i].w = cmd->params.create.w;
                         layers[i].h = cmd->params.create.h;
-                        layers[i].buffer = (unsigned int *)0x40000000 + (i * MAX_LAYER_W * MAX_LAYER_H); // 仮のメモリ配置
                         break;
                     }
                 }
@@ -43,9 +44,11 @@ int xiao_app_entry(xiao_env *env) {
                     }
                 }
             } else if (cmd->type == GUI_CMD_COMMIT_LAYER) {
-                // 合成処理 (簡易的)
                 int sw, sh;
                 xiao_video_size(env, &sw, &sh);
+                // 背景クリア
+                for(int i=0; i<sw*sh; i++) frame_buffer[i] = 0x000000u;
+
                 for (int i = 0; i < MAX_LAYERS; i++) {
                     if (layers[i].active) {
                         for (int y = 0; y < layers[i].h; y++) {

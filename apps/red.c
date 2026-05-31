@@ -1,26 +1,51 @@
 #include "xiao.h"
+#include "gui_proto.h"
 
 int xiao_app_entry(xiao_env *env) {
-    int sw = 0;
-    int sh = 0;
+    GuiCommand cmd;
+    int sw = 1280; // 仮の画面サイズ
+    int sh = 720;
     int step;
     int total_steps = 80;
 
-    if (xiao_video_size(env, &sw, &sh) != 0) {
-        xiao_console_print(env, "red: video size is not available\r\n");
-        return 1;
-    }
-    if (xiao_video_fill_rect_rgb888(env, 0, 0, sw, sh, 0xAA0000u) != 0) {
-        xiao_console_print(env, "red: background draw failed\r\n");
-        return 1;
-    }
+    // モード切り替え: GUIへ
+    xiao_mode_set(XIAO_MODE_GUI);
+
+    // 1. レイヤー作成リクエスト (ID: 0)
+    cmd.type = GUI_CMD_CREATE_LAYER;
+    cmd.params.create.w = sw;
+    cmd.params.create.h = sh;
+    xiao_ipc_send("gui_server", GUI_CMD_CREATE_LAYER, sizeof(GuiCommand), &cmd);
+
+    // 2. 背景塗りつぶし
+    cmd.type = GUI_CMD_DRAW_RECT;
+    cmd.params.rect.layer_id = 0;
+    cmd.params.rect.x = 0;
+    cmd.params.rect.y = 0;
+    cmd.params.rect.w = sw;
+    cmd.params.rect.h = sh;
+    cmd.params.rect.color = 0xAA0000u;
+    xiao_ipc_send("gui_server", GUI_CMD_DRAW_RECT, sizeof(GuiCommand), &cmd);
 
     for (step = 1; step <= total_steps; step++) {
-        int size = step;
-        int x = sw / 2 - size / 2;
-        int y = sh / 2 - size / 2;
-        xiao_video_fill_rect_rgb888(env, x, y, size, size, 0xFFCB52u);
+        // 3. 四角形描画
+        cmd.type = GUI_CMD_DRAW_RECT;
+        cmd.params.rect.layer_id = 0;
+        cmd.params.rect.x = sw / 2 - step / 2;
+        cmd.params.rect.y = sh / 2 - step / 2;
+        cmd.params.rect.w = step;
+        cmd.params.rect.h = step;
+        cmd.params.rect.color = 0xFFCB52u;
+        xiao_ipc_send("gui_server", GUI_CMD_DRAW_RECT, sizeof(GuiCommand), &cmd);
+
+        // 4. 確定して描画更新
+        cmd.type = GUI_CMD_COMMIT_LAYER;
+        xiao_ipc_send("gui_server", GUI_CMD_COMMIT_LAYER, sizeof(GuiCommand), &cmd);
+
         xiao_wait(env, 25);
     }
+
+    // モード切り替え: CLIへ戻す
+    xiao_mode_set(XIAO_MODE_CLI);
     return 0;
 }

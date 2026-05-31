@@ -900,16 +900,26 @@ static int run_cli_terminal(xiao_env *env) {
     xiao_console_set_sink(cli_sink, st);
     cli_render_dirty(st);
 
+    int gui_initialized = 0;
     while (1) {
         if (xiao_mode_get() == XIAO_MODE_GUI) {
-            if (xiao_ipc_receive(&msg) == 0 && msg.type == GUI_CMD_FRAME_READY) {
-                int sw, sh;
-                xiao_video_size(env, &sw, &sh);
-                xiao_video_blit_rgb888(env, 0, 0, sw, sh, (unsigned int *)msg.data, sw);
+            if (!gui_initialized) {
+                xiao_video_fill_rgb888(env, 0x000000u);
+                gui_initialized = 1;
+            }
+            if (xiao_ipc_receive(&msg) == 0) {
+                if (msg.type == GUI_CMD_FRAME_READY) {
+                    int sw, sh;
+                    xiao_video_size(env, &sw, &sh);
+                    xiao_video_blit_rgb888(env, 0, 0, sw, sh, (unsigned int *)msg.data, sw);
+                } else {
+                    xiao_console_print(env, "TERM: Got other msg\n");
+                }
             }
             xiao_wait(env, 10);
             continue;
         }
+        gui_initialized = 0;
 
         int ch = xiao_input_read(env);
         if (ch < 0) {

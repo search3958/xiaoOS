@@ -393,7 +393,7 @@ static const xiao_app *xiao_find_app(const xiao_boot_image *image, const char *n
     return 0;
 }
 
-static void xiao_run_app_args(const xiao_app *app, int argc, const char **argv) {
+static void xiao_run_app_args(const xiao_app *app, int argc, const char **argv, unsigned int type, unsigned int size, const void *data) {
     const char *saved_app_name = current_env.app_name;
     xiao_ipc_message saved_ipc = current_env.ipc;
     if (!app || !app->main) return;
@@ -401,6 +401,9 @@ static void xiao_run_app_args(const xiao_app *app, int argc, const char **argv) 
     current_env.ipc.from = saved_app_name ? saved_app_name : "kernel";
     current_env.ipc.argc = argc;
     current_env.ipc.argv = argv;
+    current_env.ipc.type = type;
+    current_env.ipc.size = size;
+    current_env.ipc.data = data;
     app->main(&current_env);
     current_env.app_name = saved_app_name;
     current_env.ipc = saved_ipc;
@@ -410,7 +413,7 @@ static void xiao_run_app(const xiao_app *app) {
     const char *argv[1];
     if (!app) return;
     argv[0] = app->name;
-    xiao_run_app_args(app, 1, argv);
+    xiao_run_app_args(app, 1, argv, 0, 0, 0);
 }
 
 static void xiao_spawn(const xiao_app *app) {
@@ -527,15 +530,15 @@ int xiao_exec_app(const char *name) {
     const char *argv[1];
     if (!name) return -1;
     argv[0] = name;
-    return xiao_exec_app_args(name, 1, argv);
+    return xiao_exec_app_args(name, 1, argv, 0, 0, 0);
 }
 
-int xiao_exec_app_args(const char *name, int argc, const char **argv) {
+int xiao_exec_app_args(const char *name, int argc, const char **argv, unsigned int type, unsigned int size, const void *data) {
     const xiao_app *app;
     if (!current_image || !name) return -1;
     app = xiao_find_app(current_image, name);
     if (!app) return -1;
-    xiao_run_app_args(app, argc, argv);
+    xiao_run_app_args(app, argc, argv, type, size, data);
     return 0;
 }
 
@@ -559,7 +562,7 @@ int xiao_exec_line(const char *line) {
         if (copy[i]) copy[i++] = 0;
     }
     if (argc == 0) return 0;
-    return xiao_exec_app_args(argv[0], argc, argv);
+    return xiao_exec_app_args(argv[0], argc, argv, 0, 0, 0);
 }
 
 int xiao_argc(xiao_env *env) {

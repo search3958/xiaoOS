@@ -33,6 +33,10 @@ typedef struct {
     const char *from;
     int argc;
     const char **argv;
+    // New IPC fields
+    unsigned int type;       // Message type (e.g., CMD, DATA, EVENT)
+    unsigned int size;       // Payload size
+    const void *data;        // Payload
 } xiao_ipc_message;
 
 typedef int (*xiao_console_sink_fn)(void *ctx, const char *data, xiao_size len);
@@ -82,7 +86,7 @@ void xiao_console_print(xiao_env *env, const char *text);
 void xiao_console_write(xiao_env *env, const char *data, xiao_size len);
 int xiao_input_read(xiao_env *env);
 int xiao_exec_app(const char *name);
-int xiao_exec_app_args(const char *name, int argc, const char **argv);
+int xiao_exec_app_args(const char *name, int argc, const char **argv, unsigned int type, unsigned int size, const void *data);
 int xiao_exec_line(const char *line);
 int xiao_argc(xiao_env *env);
 const char *xiao_argv(xiao_env *env, int index);

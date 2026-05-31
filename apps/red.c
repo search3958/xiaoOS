@@ -3,11 +3,11 @@
 
 int xiao_app_entry(xiao_env *env) {
     GuiCommand cmd;
-    int sw = 1280;
-    int sh = 720;
+    int sw, sh;
     int step;
     int total_steps = 80;
 
+    xiao_video_size(env, &sw, &sh);
     xiao_exec_line("mode gui");
 
     cmd.type = GUI_CMD_CREATE_SURFACE;

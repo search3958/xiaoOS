@@ -3,11 +3,11 @@
 
 int xiao_app_entry(xiao_env *env) {
     GuiCommand cmd;
-    int sw = 1280;
-    int sh = 720;
+    int sw, sh;
     int size = 0;
     int max_size = 200;
 
+    xiao_video_size(env, &sw, &sh);
     // 1. レイヤー(サーフェス)作成 (ID: 0)
     cmd.type = GUI_CMD_CREATE_SURFACE;
     cmd.params.surface.id = 0;

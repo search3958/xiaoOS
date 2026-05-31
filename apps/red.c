@@ -8,8 +8,8 @@ int xiao_app_entry(xiao_env *env) {
     int step;
     int total_steps = 80;
 
-    // モード切り替え: GUIへ
-    xiao_mode_set(XIAO_MODE_GUI);
+    // コマンドとしてモード切り替えを実行
+    xiao_exec_line("mode gui");
 
     // 1. レイヤー作成リクエスト (ID: 0)
     cmd.type = GUI_CMD_CREATE_LAYER;
@@ -45,7 +45,8 @@ int xiao_app_entry(xiao_env *env) {
         xiao_wait(env, 25);
     }
 
-    // モード切り替え: CLIへ戻す
-    xiao_mode_set(XIAO_MODE_CLI);
+    // コマンドとしてCLIモードに戻す
+    xiao_exec_line("mode cli");
+
     return 0;
 }

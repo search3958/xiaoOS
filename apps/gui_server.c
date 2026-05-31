@@ -49,16 +49,23 @@ int xiao_app_entry(xiao_env *env) {
                 // 背景クリア
                 for(int i=0; i<sw*sh; i++) frame_buffer[i] = 0x000000u;
 
+                int drawn = 0;
                 for (int i = 0; i < MAX_LAYERS; i++) {
                     if (layers[i].active) {
                         for (int y = 0; y < layers[i].h; y++) {
                             for (int x = 0; x < layers[i].w; x++) {
-                                if (x < sw && y < sh)
-                                    frame_buffer[y * sw + x] = layers[i].buffer[y * layers[i].w + x];
+                                if (x < sw && y < sh) {
+                                    unsigned int color = layers[i].buffer[y * layers[i].w + x];
+                                    if(color != 0) {
+                                        frame_buffer[y * sw + x] = color;
+                                        drawn = 1;
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                if(drawn) xiao_console_print(env, "GUI: Frame Drawn\n");
                 xiao_ipc_send("terminal", GUI_CMD_FRAME_READY, sizeof(frame_buffer), frame_buffer);
             }
         }

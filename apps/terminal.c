@@ -846,6 +846,8 @@ static int run_cli_terminal(xiao_env *env) {
 #else
 #include "gui_proto.h"
 
+// gui_proto.h で extern 宣言されているため、ここでは宣言を削除
+
 static int run_cli_terminal(xiao_env *env) {
     const char *font_data = 0;
     xiao_size font_size = 0;
@@ -902,9 +904,12 @@ static int run_cli_terminal(xiao_env *env) {
 
     while (1) {
         if (xiao_mode_get() == XIAO_MODE_GUI) {
-            int sw, sh;
-            xiao_video_size(env, &sw, &sh);
-            xiao_video_blit_rgb888(env, 0, 0, sw, sh, gui_framebuffer, sw);
+            xiao_ipc_message msg;
+            if (xiao_ipc_receive(&msg) == 0 && msg.type == GUI_CMD_FRAME_READY) {
+                int sw, sh;
+                xiao_video_size(env, &sw, &sh);
+                xiao_video_blit_rgb888(env, 0, 0, sw, sh, gui_framebuffer, sw);
+            }
         }
 
         int ch = xiao_input_read(env);

@@ -121,6 +121,9 @@ int xiao_video_blit_rgb888(xiao_env *env, int x, int y, int w, int h, const unsi
 int xiao_platform(xiao_env *env);
 int xiao_mode_get(void);
 int xiao_mode_set(int mode);
+int xiao_ipc_send(const char *target_app, unsigned int type, unsigned int size, const void *data);
+int xiao_ipc_receive(xiao_ipc_message *out_msg);
+
 void xiao_console_set_sink(xiao_console_sink_fn sink, void *ctx);
 
 extern const xiao_boot_image xiao_image;

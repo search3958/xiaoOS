@@ -7,9 +7,13 @@
 #define XIAO_FS_MAX_PATH 64
 #define XIAO_FS_RAM_SIZE 4096
 
+#define XIAO_MAX_MSG_QUEUE 4
+
 typedef struct {
     const xiao_app *app;
     int active;
+    xiao_ipc_message msg_queue[XIAO_MAX_MSG_QUEUE];
+    int msg_count;
 } xiao_task;
 
 static xiao_task tasks[XIAO_MAX_TASKS];
@@ -422,6 +426,7 @@ static void xiao_spawn(const xiao_app *app) {
         if (!tasks[i].active) {
             tasks[i].app = app;
             tasks[i].active = 1;
+            tasks[i].msg_count = 0;
             return;
         }
     }
@@ -895,6 +900,47 @@ int xiao_mode_set(int mode) {
     if (mode != XIAO_MODE_TEXT && mode != XIAO_MODE_CLI && mode != XIAO_MODE_GUI) return -1;
     xiao_mode = mode;
     return 0;
+}
+
+int xiao_ipc_send(const char *target_app, unsigned int type, unsigned int size, const void *data) {
+    xiao_size i;
+    for (i = 0; i < XIAO_MAX_TASKS; i++) {
+        if (tasks[i].active && xiao_streq(tasks[i].app->name, target_app)) {
+            if (tasks[i].msg_count < XIAO_MAX_MSG_QUEUE) {
+                xiao_ipc_message *msg = &tasks[i].msg_queue[tasks[i].msg_count++];
+                msg->from = current_env.app_name ? current_env.app_name : "kernel";
+                msg->argc = 0;
+                msg->argv = 0;
+                msg->type = type;
+                msg->size = size;
+                msg->data = data;
+                return 0;
+            }
+            return -1; // Queue full
+        }
+    }
+    return -1; // App not found
+}
+
+int xiao_ipc_receive(xiao_ipc_message *out_msg) {
+    xiao_size i;
+    // Find current task
+    for (i = 0; i < XIAO_MAX_TASKS; i++) {
+        if (tasks[i].active && xiao_streq(tasks[i].app->name, current_env.app_name)) {
+            if (tasks[i].msg_count > 0) {
+                *out_msg = tasks[i].msg_queue[0];
+                // Shift queue
+                xiao_size j;
+                for (j = 0; j < (int)tasks[i].msg_count - 1; j++) {
+                    tasks[i].msg_queue[j] = tasks[i].msg_queue[j + 1];
+                }
+                tasks[i].msg_count--;
+                return 0;
+            }
+            return -1; // No messages
+        }
+    }
+    return -1;
 }
 
 void xiao_console_set_sink(xiao_console_sink_fn sink, void *ctx) {

@@ -900,31 +900,23 @@ static int run_cli_terminal(xiao_env *env) {
     xiao_console_set_sink(cli_sink, st);
     cli_render_dirty(st);
 
-    int gui_initialized = 0;
     while (1) {
         if (xiao_mode_get() == XIAO_MODE_GUI) {
-            if (!gui_initialized) {
-                xiao_video_fill_rgb888(env, 0x000000u);
-                gui_initialized = 1;
-            }
-            if (xiao_ipc_receive(&msg) == 0 && msg.type == GUI_CMD_FRAME_READY) {
-                int sw, sh;
-                xiao_video_size(env, &sw, &sh);
-                xiao_video_blit_rgb888(env, 0, 0, sw, sh, (unsigned int *)msg.data, sw);
-            }
+            int sw, sh;
+            xiao_video_size(env, &sw, &sh);
+            xiao_video_blit_rgb888(env, 0, 0, sw, sh, gui_framebuffer, sw);
         }
-        
-        // GUI/CLI共通で入力を処理
+
         int ch = xiao_input_read(env);
         if (ch >= 0) {
             if (ch == '\r' || ch == '\n') {
                 st->input[st->input_len] = 0;
-                // GUIモードの時は入力をエコーしない
                 if (xiao_mode_get() != XIAO_MODE_GUI) {
                     cli_feed_output(st, TERM_PROMPT_STR, xstrlen(TERM_PROMPT_STR));
                     cli_feed_output(st, st->input, xstrlen(st->input));
                     cli_feed_output(st, "\n", 1);
                 }
+
                 if (st->input_len > 0) {
                     action = terminal_action_for_line(st->input);
                     if (action != TERM_ACTION_NONE) break;
@@ -937,11 +929,14 @@ static int run_cli_terminal(xiao_env *env) {
                         }
                     }
                 }
+
                 if (xiao_mode_get() != run_mode) {
                     action = TERM_ACTION_MODE_SWITCH;
                     break;
                 }
-                st->input_len = 0; st->input[0] = 0;
+
+                st->input_len = 0;
+                st->input[0] = 0;
                 st->input_dirty = 1;
                 if (xiao_mode_get() != XIAO_MODE_GUI) cli_render_dirty(st);
             } else if ((ch == 0x08 || ch == 0x7f) && st->input_len > 0) {
@@ -955,10 +950,6 @@ static int run_cli_terminal(xiao_env *env) {
                 st->input_dirty = 1;
                 if (xiao_mode_get() != XIAO_MODE_GUI) cli_render_dirty(st);
             }
-        }
-        
-        if (xiao_mode_get() != XIAO_MODE_GUI) {
-            gui_initialized = 0;
         }
         xiao_wait(env, 10);
     }
@@ -996,10 +987,6 @@ int xiao_app_entry(xiao_env *env) {
         if (mode == XIAO_MODE_TEXT) {
             rc = run_text_terminal(env);
         } else {
-            if (mode == XIAO_MODE_GUI && !warned_gui) {
-                xiao_console_print(env, "terminal: gui mode is reserved for later, using cli renderer\r\n");
-                warned_gui = 1;
-            }
             rc = run_cli_terminal(env);
         }
 

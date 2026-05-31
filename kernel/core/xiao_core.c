@@ -9,6 +9,23 @@
 
 #define XIAO_MAX_MSG_QUEUE 4
 
+#define SCREEN_W 1280
+#define SCREEN_H 720
+unsigned int gui_framebuffer[SCREEN_W * SCREEN_H];
+
+void gui_clear_framebuffer(void) {
+    for(int i=0; i<SCREEN_W*SCREEN_H; i++) gui_framebuffer[i] = 0x000000u;
+}
+
+void gui_draw_rect(int x, int y, int w, int h, unsigned int color) {
+    for (int iy = y; iy < y + h; iy++) {
+        for (int ix = x; ix < x + w; ix++) {
+            if (ix >= 0 && ix < SCREEN_W && iy >= 0 && iy < SCREEN_H)
+                gui_framebuffer[iy * SCREEN_W + ix] = color;
+        }
+    }
+}
+
 typedef struct {
     const xiao_app *app;
     int active;

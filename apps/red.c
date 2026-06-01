@@ -2,7 +2,7 @@
 #include "gui_proto.h"
 
 int xiao_app_entry(xiao_env *env) {
-    GuiCommand cmd;
+    static GuiCommand cmd;
     int sw, sh;
     int step;
     int total_steps = 80;
@@ -10,6 +10,7 @@ int xiao_app_entry(xiao_env *env) {
     xiao_video_size(env, &sw, &sh);
     xiao_exec_line("mode gui");
 
+    // Initialize surface
     cmd.type = GUI_CMD_CREATE_SURFACE;
     cmd.params.surface.id = 0;
     cmd.params.surface.w = sw;
@@ -17,6 +18,7 @@ int xiao_app_entry(xiao_env *env) {
     xiao_ipc_send("gui_server", GUI_CMD_CREATE_SURFACE, sizeof(GuiCommand), &cmd);
 
     for (step = 1; step <= total_steps; step++) {
+        // Draw to surface (deferred)
         cmd.type = GUI_CMD_DRAW_RECT;
         cmd.params.rect.id = 0;
         cmd.params.rect.x = sw / 2 - step / 2;
@@ -26,11 +28,13 @@ int xiao_app_entry(xiao_env *env) {
         cmd.params.rect.color = 0xFFCB52u;
         xiao_ipc_send("gui_server", GUI_CMD_DRAW_RECT, sizeof(GuiCommand), &cmd);
 
+        // Commit and trigger redraw (engine handles blit)
         cmd.type = GUI_CMD_COMMIT;
         xiao_ipc_send("gui_server", GUI_CMD_COMMIT, sizeof(GuiCommand), &cmd);
 
         xiao_wait(env, 25);
     }
+
 
     xiao_exec_line("mode cli");
     return 0;

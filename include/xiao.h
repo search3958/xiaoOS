@@ -126,11 +126,6 @@ int xiao_ipc_receive(xiao_ipc_message *out_msg);
 
 void xiao_console_set_sink(xiao_console_sink_fn sink, void *ctx);
 
-extern unsigned int gui_framebuffer[];
-void gui_clear_framebuffer(void);
-void gui_draw_rect(int x, int y, int w, int h, unsigned int color);
-unsigned int* gui_get_framebuffer(void);
-
 extern const xiao_boot_image xiao_image;
 
 #endif

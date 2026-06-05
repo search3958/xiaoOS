@@ -17,6 +17,7 @@ int xiao_app_entry(xiao_env *env) {
     }
 
     xiao_console_print(env, "clutchpad: started\r\n");
+    xiao_exec_line("mode gui");
 
     while (1) {
         int key;
@@ -52,5 +53,6 @@ int xiao_app_entry(xiao_env *env) {
         xiao_wait(env, 16);
     }
 
+    xiao_exec_line("mode cli");
     return 0;
 }

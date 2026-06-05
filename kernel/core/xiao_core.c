@@ -838,6 +838,12 @@ int xiao_mouse_get(xiao_env *env, xiao_mouse_state *out) {
     return -1;
 }
 
+void xiao_mouse_reset(xiao_env *env) {
+    if (env && env->hal && env->hal->mouse_reset) {
+        env->hal->mouse_reset();
+    }
+}
+
 int xiao_video_fill_rgb888(xiao_env *env, unsigned int rgb888) {
     if (env && env->hal && env->hal->video_fill_rgb888) {
         return env->hal->video_fill_rgb888(rgb888);

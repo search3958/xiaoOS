@@ -181,6 +181,7 @@ static void uefi_yield(void) {
 static int uefi_mouse_get(xiao_mouse_state *out) {
     EFI_SIMPLE_POINTER_STATE state;
     int sw, sh;
+    int poll_count = 0;
 
     if (!pointer_proto) {
         if (!st || !st->BootServices || !st->BootServices->LocateProtocol) return -1;
@@ -193,17 +194,31 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
         mouse_y = sh / 2;
     }
 
-    if (pointer_proto->GetState(pointer_proto, &state) == EFI_SUCCESS) {
+    // Poll multiple times to drain the queue and be more responsive
+    while (poll_count < 10 && pointer_proto->GetState(pointer_proto, &state) == EFI_SUCCESS) {
         uefi_video_size(&sw, &sh);
-        mouse_x += (int)state.RelativeMovementX;
-        mouse_y += (int)state.RelativeMovementY;
+        
+        int dx = (int)state.RelativeMovementX;
+        int dy = (int)state.RelativeMovementY;
+        
+        if (dx != 0 || dy != 0 || state.LeftButton || state.RightButton) {
+            xiao_serial_print(0, "UEFI Mouse: dx=");
+            // Simple integer to string would be better, but for now just a mark
+            xiao_serial_print(0, " moved\r\n");
+        }
+
+        mouse_x += dx;
+        mouse_y += dy;
+        
         if (mouse_x < 0) mouse_x = 0;
         if (mouse_y < 0) mouse_y = 0;
         if (mouse_x >= sw) mouse_x = sw - 1;
         if (mouse_y >= sh) mouse_y = sh - 1;
+        
         mouse_btns = 0;
         if (state.LeftButton) mouse_btns |= 1;
         if (state.RightButton) mouse_btns |= 2;
+        poll_count++;
     }
 
     if (out) {
@@ -517,6 +532,12 @@ static int uefi_video_fill_rgb888(unsigned int rgb888) {
     return uefi_video_fill_rect_rgb888(0, 0, w, h, rgb888);
 }
 
+static void uefi_mouse_reset(void) {
+    if (pointer_proto && pointer_proto->Reset) {
+        pointer_proto->Reset(pointer_proto, 0);
+    }
+}
+
 static const xiao_hal uefi_hal = {
     uefi_serial_write,
     uefi_console_write,
@@ -531,6 +552,7 @@ static const xiao_hal uefi_hal = {
     XIAO_PLATFORM_PC,
     uefi_video_blit_rgb888,
     uefi_mouse_get,
+    uefi_mouse_reset,
 };
 
 int xiao_uefi_reboot(void) {
@@ -555,6 +577,17 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     (void)image;
     st = system_table;
     serial_init();
+
+    // Early locate pointer to see if it exists
+    if (st && st->BootServices && st->BootServices->LocateProtocol) {
+        if (st->BootServices->LocateProtocol((EFI_GUID *)&pointer_guid, 0, (void **)&pointer_proto) == EFI_SUCCESS) {
+            if (pointer_proto && pointer_proto->Reset) pointer_proto->Reset(pointer_proto, 0);
+            xiao_serial_print(0, "UEFI: Pointer protocol located at startup\r\n");
+        } else {
+            xiao_serial_print(0, "UEFI: Pointer protocol NOT found at startup\r\n");
+        }
+    }
+
     xiao_start(&uefi_hal, &xiao_image);
     return EFI_SUCCESS;
 }

@@ -33,13 +33,17 @@ int xiao_app_entry(xiao_env *env) {
         );
 
         if (xiao_mouse_get(env, &mouse) == 0) {
-            // Draw a simple 4x4 cursor
-            xiao_video_fill_rect_rgb888(env, mouse.x - 2, mouse.y - 2, 4, 4, 0xFFFFFFu);
+            // Draw a simple 4x4 cursor, black if clicked, white otherwise
+            unsigned int cursor_color = (mouse.buttons != 0) ? 0x000000u : 0xFFFFFFu;
+            xiao_video_fill_rect_rgb888(env, mouse.x - 2, mouse.y - 2, 4, 4, cursor_color);
         }
 
         key = xiao_input_read(env);
 
-        if (key >= 0) {
+        if (key == 'r') {
+            xiao_mouse_reset(env);
+            xiao_console_print(env, "clutchpad: mouse reset requested\r\n");
+        } else if (key >= 0) {
             key_count++;
 
             xiao_console_print(

@@ -93,6 +93,7 @@ exec qemu-system-aarch64 \
     -drive if=none,id=hd0,file=fat:rw:build/arm64/esp,format=raw \
     -device virtio-blk-device,drive=hd0 \
     -net none \
-    -serial vc \
+    -serial stdio \
+    -device usb-mouse \
     -monitor none \
     -no-reboot

@@ -159,8 +159,17 @@ static u8 mouse_read(void) {
 
 static void mouse_init(void) {
     u8 status;
+    
+    // Disable keyboard/mouse ports while configuring
     mouse_wait(1);
-    outb(0x64, 0xA8);
+    outb(0x64, 0xAD); // Disable KBD
+    mouse_wait(1);
+    outb(0x64, 0xA7); // Disable Mouse
+    
+    // Flush output buffer
+    while (inb(0x64) & 1) inb(0x60);
+
+    // Enable IRQ12 in controller command byte
     mouse_wait(1);
     outb(0x64, 0x20);
     mouse_wait(0);
@@ -169,27 +178,58 @@ static void mouse_init(void) {
     outb(0x64, 0x60);
     mouse_wait(1);
     outb(0x60, status);
-    mouse_write(0xF6);
-    mouse_read();
-    mouse_write(0xF4);
-    mouse_read();
+    
+    // Enable Mouse port
+    mouse_wait(1);
+    outb(0x64, 0xA8);
+
+    // Tell mouse to use default settings and start reporting
+    mouse_write(0xF6); // Set default
+    mouse_read();      // ACK
+    mouse_write(0xF4); // Enable data reporting
+    mouse_read();      // ACK
+    
+    // Re-enable KBD
+    mouse_wait(1);
+    outb(0x64, 0xAE);
+    
     mouse_init_done = 1;
+    mouse_cycle = 0;
 }
 
 static void mouse_poll(void) {
     if (!mouse_init_done) mouse_init();
-    while ((inb(0x64) & 1) && (inb(0x64) & 0x20)) {
+    
+    // Limit loops to prevent hanging if mouse sends too much
+    int limit = 20;
+    while (limit-- > 0 && (inb(0x64) & 1)) {
+        u8 status = inb(0x64);
         u8 b = inb(0x60);
+        
+        // Only process if it's mouse data
+        if (!(status & 0x20)) {
+            continue; 
+        }
+        
+        // Packet sync: first byte must have bit 3 set
+        if (mouse_cycle == 0 && !(b & 0x08)) {
+            continue;
+        }
+
         mouse_bytes[mouse_cycle++] = b;
         if (mouse_cycle == 3) {
             mouse_cycle = 0;
-            if (mouse_bytes[0] & 0x80 || mouse_bytes[0] & 0x40) return;
+            // Filter invalid packets
+            if (mouse_bytes[0] & 0x80 || mouse_bytes[0] & 0x40) continue;
+            
             int dx = (int)mouse_bytes[1];
             int dy = (int)mouse_bytes[2];
             if (mouse_bytes[0] & 0x10) dx -= 256;
             if (mouse_bytes[0] & 0x20) dy -= 256;
-            mouse_x += dx / 4;
-            mouse_y -= dy / 4;
+            
+            mouse_x += dx;
+            mouse_y -= dy;
+            
             if (mouse_x < 0) mouse_x = 0;
             if (mouse_y < 0) mouse_y = 0;
             if (mouse_x >= VGA_W) mouse_x = VGA_W - 1;
@@ -287,6 +327,7 @@ static const xiao_hal bios_hal = {
     XIAO_PLATFORM_PC,
     0,
     bios_mouse_get,
+    mouse_init,
 };
 
 void xiao_bios_main(void) {

@@ -209,6 +209,14 @@ typedef struct {
     BOOLEAN RightButton;
 } EFI_SIMPLE_POINTER_STATE;
 
+typedef struct {
+    unsigned long long ResolutionX;
+    unsigned long long ResolutionY;
+    unsigned long long ResolutionZ;
+    BOOLEAN LeftButton;
+    BOOLEAN RightButton;
+} EFI_SIMPLE_POINTER_MODE;
+
 struct EFI_SIMPLE_POINTER_PROTOCOL;
 
 typedef EFI_STATUS (*EFI_SIMPLE_POINTER_RESET)(
@@ -225,6 +233,7 @@ typedef struct EFI_SIMPLE_POINTER_PROTOCOL {
     EFI_SIMPLE_POINTER_RESET Reset;
     EFI_SIMPLE_POINTER_GET_STATE GetState;
     void *WaitForInput;
+    EFI_SIMPLE_POINTER_MODE *Mode;
 } EFI_SIMPLE_POINTER_PROTOCOL;
 
 typedef struct {

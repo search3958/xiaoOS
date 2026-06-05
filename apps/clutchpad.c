@@ -21,6 +21,7 @@ int xiao_app_entry(xiao_env *env) {
 
     while (1) {
         int key;
+        xiao_mouse_state mouse;
 
         xiao_video_fill_rect_rgb888(
             env,
@@ -30,6 +31,11 @@ int xiao_app_entry(xiao_env *env) {
             sh,
             CLUTCHPAD_BG
         );
+
+        if (xiao_mouse_get(env, &mouse) == 0) {
+            // Draw a simple 4x4 cursor
+            xiao_video_fill_rect_rgb888(env, mouse.x - 2, mouse.y - 2, 4, 4, 0xFFFFFFu);
+        }
 
         key = xiao_input_read(env);
 

@@ -822,11 +822,20 @@ void xiao_fs_info_read(xiao_fs_info *info) {
 }
 
 void xiao_wait(xiao_env *env, xiao_tick ms) {
-    if (env && env->hal && env->hal->wait_ms) env->hal->wait_ms(ms);
+    if (env && env->hal && env->hal->wait_ms) {
+        env->hal->wait_ms(ms);
+    }
 }
 
 void xiao_yield(xiao_env *env) {
     if (env && env->hal && env->hal->yield) env->hal->yield();
+}
+
+int xiao_mouse_get(xiao_env *env, xiao_mouse_state *out) {
+    if (env && env->hal && env->hal->mouse_get) {
+        return env->hal->mouse_get(out);
+    }
+    return -1;
 }
 
 int xiao_video_fill_rgb888(xiao_env *env, unsigned int rgb888) {
@@ -930,7 +939,7 @@ int xiao_ipc_receive(xiao_ipc_message *out_msg) {
             if (tasks[i].msg_count > 0) {
                 *out_msg = tasks[i].msg_queue[0];
                 // Shift queue
-                xiao_size j;
+                int j;
                 for (j = 0; j < (int)tasks[i].msg_count - 1; j++) {
                     tasks[i].msg_queue[j] = tasks[i].msg_queue[j + 1];
                 }

@@ -125,6 +125,91 @@ static int bios_input_read(void) {
     return (int)inb(COM1);
 }
 
+static int mouse_x = 40;
+static int mouse_y = 12;
+static int mouse_btns = 0;
+static int mouse_cycle = 0;
+static u8 mouse_bytes[3];
+static int mouse_init_done = 0;
+
+static void mouse_wait(u8 type) {
+    u32 timeout = 100000;
+    if (type == 0) {
+        while (timeout--) {
+            if ((inb(0x64) & 1) == 1) return;
+        }
+    } else {
+        while (timeout--) {
+            if ((inb(0x64) & 2) == 0) return;
+        }
+    }
+}
+
+static void mouse_write(u8 a) {
+    mouse_wait(1);
+    outb(0x64, 0xD4);
+    mouse_wait(1);
+    outb(0x60, a);
+}
+
+static u8 mouse_read(void) {
+    mouse_wait(0);
+    return inb(0x60);
+}
+
+static void mouse_init(void) {
+    u8 status;
+    mouse_wait(1);
+    outb(0x64, 0xA8);
+    mouse_wait(1);
+    outb(0x64, 0x20);
+    mouse_wait(0);
+    status = inb(0x60) | 2;
+    mouse_wait(1);
+    outb(0x64, 0x60);
+    mouse_wait(1);
+    outb(0x60, status);
+    mouse_write(0xF6);
+    mouse_read();
+    mouse_write(0xF4);
+    mouse_read();
+    mouse_init_done = 1;
+}
+
+static void mouse_poll(void) {
+    if (!mouse_init_done) mouse_init();
+    while ((inb(0x64) & 1) && (inb(0x64) & 0x20)) {
+        u8 b = inb(0x60);
+        mouse_bytes[mouse_cycle++] = b;
+        if (mouse_cycle == 3) {
+            mouse_cycle = 0;
+            if (mouse_bytes[0] & 0x80 || mouse_bytes[0] & 0x40) return;
+            int dx = (int)mouse_bytes[1];
+            int dy = (int)mouse_bytes[2];
+            if (mouse_bytes[0] & 0x10) dx -= 256;
+            if (mouse_bytes[0] & 0x20) dy -= 256;
+            mouse_x += dx / 4;
+            mouse_y -= dy / 4;
+            if (mouse_x < 0) mouse_x = 0;
+            if (mouse_y < 0) mouse_y = 0;
+            if (mouse_x >= VGA_W) mouse_x = VGA_W - 1;
+            if (mouse_y >= VGA_H) mouse_y = VGA_H - 1;
+            mouse_btns = mouse_bytes[0] & 0x07;
+        }
+    }
+}
+
+static int bios_mouse_get(xiao_mouse_state *out) {
+    mouse_poll();
+
+    if (out) {
+        out->x = mouse_x;
+        out->y = mouse_y;
+        out->buttons = mouse_btns;
+    }
+    return 0;
+}
+
 static void bios_wait_ms(xiao_tick ms) {
     volatile unsigned long i;
     while (ms--) {
@@ -200,6 +285,8 @@ static const xiao_hal bios_hal = {
     bios_video_size,
     bios_video_set_mode,
     XIAO_PLATFORM_PC,
+    0,
+    bios_mouse_get,
 };
 
 void xiao_bios_main(void) {

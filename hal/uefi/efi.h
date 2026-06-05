@@ -8,6 +8,8 @@ typedef void *EFI_HANDLE;
 typedef unsigned int UINT32;
 typedef unsigned short UINT16;
 typedef unsigned char UINT8;
+typedef unsigned char BOOLEAN;
+typedef long long INT64;
 
 #define EFI_SUCCESS 0
 
@@ -198,6 +200,32 @@ typedef struct EFI_GRAPHICS_OUTPUT_PROTOCOL {
     EFI_GRAPHICS_OUTPUT_PROTOCOL_BLT Blt;
     EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
+
+typedef struct {
+    INT64 RelativeMovementX;
+    INT64 RelativeMovementY;
+    INT64 RelativeMovementZ;
+    BOOLEAN LeftButton;
+    BOOLEAN RightButton;
+} EFI_SIMPLE_POINTER_STATE;
+
+struct EFI_SIMPLE_POINTER_PROTOCOL;
+
+typedef EFI_STATUS (*EFI_SIMPLE_POINTER_RESET)(
+    struct EFI_SIMPLE_POINTER_PROTOCOL *This,
+    BOOLEAN ExtendedVerification
+);
+
+typedef EFI_STATUS (*EFI_SIMPLE_POINTER_GET_STATE)(
+    struct EFI_SIMPLE_POINTER_PROTOCOL *This,
+    EFI_SIMPLE_POINTER_STATE *State
+);
+
+typedef struct EFI_SIMPLE_POINTER_PROTOCOL {
+    EFI_SIMPLE_POINTER_RESET Reset;
+    EFI_SIMPLE_POINTER_GET_STATE GetState;
+    void *WaitForInput;
+} EFI_SIMPLE_POINTER_PROTOCOL;
 
 typedef struct {
     EFI_TABLE_HEADER Hdr;

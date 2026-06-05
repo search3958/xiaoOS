@@ -42,6 +42,12 @@ typedef struct {
 typedef int (*xiao_console_sink_fn)(void *ctx, const char *data, xiao_size len);
 
 typedef struct {
+    int x;
+    int y;
+    int buttons;
+} xiao_mouse_state;
+
+typedef struct {
     void (*serial_write)(const char *data, xiao_size len);
     void (*console_write)(const char *data, xiao_size len);
     int (*input_read)(void);
@@ -54,6 +60,7 @@ typedef struct {
     int (*video_set_mode)(int w, int h);
     int platform;
     int (*video_blit_rgb888)(int x, int y, int w, int h, const unsigned int *pixels, int stride);
+    int (*mouse_get)(xiao_mouse_state *out);
 } xiao_hal;
 
 struct xiao_env {
@@ -112,6 +119,7 @@ int xiao_fs_copy(const char *src_path, const char *dst_path);
 void xiao_fs_info_read(xiao_fs_info *info);
 void xiao_wait(xiao_env *env, xiao_tick ms);
 void xiao_yield(xiao_env *env);
+int xiao_mouse_get(xiao_env *env, xiao_mouse_state *out);
 int xiao_video_fill_rgb888(xiao_env *env, unsigned int rgb888);
 int xiao_video_draw_pixel_rgb888(xiao_env *env, int x, int y, unsigned int rgb888);
 int xiao_video_fill_rect_rgb888(xiao_env *env, int x, int y, int w, int h, unsigned int rgb888);

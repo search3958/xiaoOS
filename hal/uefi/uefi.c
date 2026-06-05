@@ -53,6 +53,16 @@ static const EFI_GUID gop_guid = {
     0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}
 };
 
+static const EFI_GUID pointer_guid = {
+    0x31878c87, 0x0b75, 0x11d5, {0x9a, 0x4f, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d}
+};
+
+static EFI_SIMPLE_POINTER_PROTOCOL *pointer_proto;
+static int mouse_x, mouse_y;
+static int mouse_btns;
+
+static int uefi_video_size(int *w, int *h);
+
 typedef struct {
     u16 ScanCode;
     CHAR16 UnicodeChar;
@@ -166,6 +176,42 @@ static void uefi_wait_ms(xiao_tick ms) {
 }
 
 static void uefi_yield(void) {
+}
+
+static int uefi_mouse_get(xiao_mouse_state *out) {
+    EFI_SIMPLE_POINTER_STATE state;
+    int sw, sh;
+
+    if (!pointer_proto) {
+        if (!st || !st->BootServices || !st->BootServices->LocateProtocol) return -1;
+        if (st->BootServices->LocateProtocol((EFI_GUID *)&pointer_guid, 0, (void **)&pointer_proto) != EFI_SUCCESS) return -1;
+        if (pointer_proto && pointer_proto->Reset) pointer_proto->Reset(pointer_proto, 0);
+        
+        // Init position to center
+        uefi_video_size(&sw, &sh);
+        mouse_x = sw / 2;
+        mouse_y = sh / 2;
+    }
+
+    if (pointer_proto->GetState(pointer_proto, &state) == EFI_SUCCESS) {
+        uefi_video_size(&sw, &sh);
+        mouse_x += (int)state.RelativeMovementX;
+        mouse_y += (int)state.RelativeMovementY;
+        if (mouse_x < 0) mouse_x = 0;
+        if (mouse_y < 0) mouse_y = 0;
+        if (mouse_x >= sw) mouse_x = sw - 1;
+        if (mouse_y >= sh) mouse_y = sh - 1;
+        mouse_btns = 0;
+        if (state.LeftButton) mouse_btns |= 1;
+        if (state.RightButton) mouse_btns |= 2;
+    }
+
+    if (out) {
+        out->x = mouse_x;
+        out->y = mouse_y;
+        out->buttons = mouse_btns;
+    }
+    return 0;
 }
 
 static EFI_GRAPHICS_OUTPUT_PROTOCOL *uefi_get_gop(void) {
@@ -484,6 +530,7 @@ static const xiao_hal uefi_hal = {
     uefi_video_set_mode,
     XIAO_PLATFORM_PC,
     uefi_video_blit_rgb888,
+    uefi_mouse_get,
 };
 
 int xiao_uefi_reboot(void) {

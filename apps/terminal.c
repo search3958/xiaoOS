@@ -730,6 +730,7 @@ static void render_output_row(cli_term_state *st, int row) {
 
 static void cli_render_dirty(cli_term_state *st) {
     int i;
+    if (xiao_mode_get() == XIAO_MODE_GUI) return;
     if (st->input_dirty) {
         cli_mark_input_line_dirty(st);
         st->input_dirty = 0;
@@ -764,7 +765,9 @@ static void cli_init_layers(cli_term_state *st) {
     term_init_color_lut(&st->lut_text, TERM_TEXT_COLOR);
     term_init_color_lut(&st->lut_prompt, TERM_PROMPT_COLOR);
     term_init_color_lut(&st->lut_input, TERM_INPUT_COLOR);
-    xiao_video_fill_rect_rgb888(st->env, 0, 0, st->screen_w, st->screen_h, TERM_BG_COLOR);
+    if (xiao_mode_get() != XIAO_MODE_GUI) {
+        xiao_video_fill_rect_rgb888(st->env, 0, 0, st->screen_w, st->screen_h, TERM_BG_COLOR);
+    }
     cli_mark_all_output_dirty(st);
 }
 
@@ -960,7 +963,6 @@ static int run_cli_terminal(xiao_env *env) {
 
 int xiao_app_entry(xiao_env *env) {
     int mode = xiao_mode_get();
-    int warned_gui = 0;
 
     if (xiao_argc(env) == 3 && streq(xiao_argv(env, 1), "-m")) {
         int parsed = parse_mode_name(xiao_argv(env, 2));
@@ -981,17 +983,13 @@ int xiao_app_entry(xiao_env *env) {
         if (mode == XIAO_MODE_TEXT) {
             rc = run_text_terminal(env);
         } else {
-            if (mode == XIAO_MODE_GUI && !warned_gui) {
-                xiao_console_print(env, "terminal: gui mode is reserved for later, using cli renderer\r\n");
-                warned_gui = 1;
-            }
             rc = run_cli_terminal(env);
         }
 
         if (rc == TERM_ACTION_MODE_SWITCH) {
             if (xiao_mode_get() == XIAO_MODE_TEXT) {
                 xiao_console_print(env, "\x1b[2J\x1b[H");
-            } else {
+            } else if (xiao_mode_get() == XIAO_MODE_CLI) {
                 xiao_video_fill_rgb888(env, TERM_BG_COLOR);
             }
             continue;
@@ -1002,7 +1000,7 @@ int xiao_app_entry(xiao_env *env) {
             xiao_fs_chdir("/");
             if (mode == XIAO_MODE_TEXT) {
                 xiao_console_print(env, "\x1b[2J\x1b[H");
-            } else {
+            } else if (mode == XIAO_MODE_CLI) {
                 xiao_video_fill_rgb888(env, TERM_BG_COLOR);
             }
             continue;
@@ -1013,7 +1011,7 @@ int xiao_app_entry(xiao_env *env) {
             xiao_fs_chdir("/");
             if (mode == XIAO_MODE_TEXT) {
                 xiao_console_print(env, "\x1b[2J\x1b[H");
-            } else {
+            } else if (mode == XIAO_MODE_CLI) {
                 xiao_video_fill_rgb888(env, TERM_BG_COLOR);
             }
             xiao_console_print(env, "system halted\r\n");

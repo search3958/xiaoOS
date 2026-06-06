@@ -252,4 +252,43 @@ typedef struct {
     void *ConfigurationTable;
 } EFI_SYSTEM_TABLE;
 
+/* ------------------------------------------------------------------ */
+/* EFI_ABSOLUTE_POINTER_PROTOCOL  (usb-tablet / virtio-tablet)        */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    UINTN AbsoluteMinX;
+    UINTN AbsoluteMinY;
+    UINTN AbsoluteMinZ;
+    UINTN AbsoluteMaxX;
+    UINTN AbsoluteMaxY;
+    UINTN AbsoluteMaxZ;
+    UINT32 Attributes;
+} EFI_ABSOLUTE_POINTER_MODE;
+
+typedef struct {
+    UINTN CurrentX;
+    UINTN CurrentY;
+    UINTN CurrentZ;
+    UINT32 ActiveButtons;
+} EFI_ABSOLUTE_POINTER_STATE;
+
+struct EFI_ABSOLUTE_POINTER_PROTOCOL;
+
+typedef EFI_STATUS (*EFI_ABSOLUTE_POINTER_RESET)(
+    struct EFI_ABSOLUTE_POINTER_PROTOCOL *This,
+    BOOLEAN ExtendedVerification
+);
+
+typedef EFI_STATUS (*EFI_ABSOLUTE_POINTER_GET_STATE)(
+    struct EFI_ABSOLUTE_POINTER_PROTOCOL *This,
+    EFI_ABSOLUTE_POINTER_STATE *State
+);
+
+typedef struct EFI_ABSOLUTE_POINTER_PROTOCOL {
+    EFI_ABSOLUTE_POINTER_RESET Reset;
+    EFI_ABSOLUTE_POINTER_GET_STATE GetState;
+    void *WaitForInput;
+    EFI_ABSOLUTE_POINTER_MODE *Mode;
+} EFI_ABSOLUTE_POINTER_PROTOCOL;
+
 #endif

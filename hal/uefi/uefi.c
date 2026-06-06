@@ -57,9 +57,16 @@ static const EFI_GUID pointer_guid = {
     0x31878c87, 0x0b75, 0x11d5, {0x9a, 0x4f, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d}
 };
 
+/* EFI_ABSOLUTE_POINTER_PROTOCOL GUID {8D59D32B-C655-4AE9-9B15-F25904992A43} */
+static const EFI_GUID abs_pointer_guid = {
+    0x8d59d32b, 0xc655, 0x4ae9, {0x9b, 0x15, 0xf2, 0x59, 0x04, 0x99, 0x2a, 0x43}
+};
+
 static EFI_SIMPLE_POINTER_PROTOCOL *pointer_proto;
+static EFI_ABSOLUTE_POINTER_PROTOCOL *abs_pointer_proto;
 static int mouse_x, mouse_y;
 static int mouse_btns;
+static int mouse_initialized;
 
 static int uefi_video_size(int *w, int *h);
 
@@ -179,53 +186,109 @@ static void uefi_yield(void) {
 }
 
 static int uefi_mouse_get(xiao_mouse_state *out) {
-    EFI_SIMPLE_POINTER_STATE state;
-    int sw, sh;
-    int poll_count = 0;
+    int sw = 1280, sh = 720;
+    uefi_video_size(&sw, &sh);
+    if (sw <= 0) sw = 1280;
+    if (sh <= 0) sh = 720;
 
-    if (!pointer_proto) {
-        if (!st || !st->BootServices || !st->BootServices->LocateProtocol) return -1;
-        if (st->BootServices->LocateProtocol((EFI_GUID *)&pointer_guid, 0, (void **)&pointer_proto) != EFI_SUCCESS) return -1;
-        if (pointer_proto && pointer_proto->Reset) pointer_proto->Reset(pointer_proto, 0);
-        
-        // Init position to center
-        uefi_video_size(&sw, &sh);
+    /* ----------------------------------------------------------------
+     * 初期化: 画面中央にポインターを置く (初回のみ)
+     * ---------------------------------------------------------------- */
+    if (!mouse_initialized) {
         mouse_x = sw / 2;
         mouse_y = sh / 2;
-    }
-
-    // Poll multiple times to drain the queue and be more responsive
-    while (poll_count < 10 && pointer_proto->GetState(pointer_proto, &state) == EFI_SUCCESS) {
-        uefi_video_size(&sw, &sh);
-        
-        int dx = (int)state.RelativeMovementX;
-        int dy = (int)state.RelativeMovementY;
-        
-        if (dx != 0 || dy != 0 || state.LeftButton || state.RightButton) {
-            xiao_serial_print(0, "UEFI Mouse: dx=");
-            // Simple integer to string would be better, but for now just a mark
-            xiao_serial_print(0, " moved\r\n");
-        }
-
-        mouse_x += dx;
-        mouse_y += dy;
-        
-        if (mouse_x < 0) mouse_x = 0;
-        if (mouse_y < 0) mouse_y = 0;
-        if (mouse_x >= sw) mouse_x = sw - 1;
-        if (mouse_y >= sh) mouse_y = sh - 1;
-        
         mouse_btns = 0;
-        if (state.LeftButton) mouse_btns |= 1;
-        if (state.RightButton) mouse_btns |= 2;
-        poll_count++;
+        mouse_initialized = 1;
     }
 
-    if (out) {
-        out->x = mouse_x;
-        out->y = mouse_y;
-        out->buttons = mouse_btns;
+    /* ----------------------------------------------------------------
+     * 優先: EFI_ABSOLUTE_POINTER_PROTOCOL (usb-tablet が登録するもの)
+     * macOS+QEMU ではマウスグラブ不要でこちらにイベントが来る
+     * ---------------------------------------------------------------- */
+    if (!abs_pointer_proto && st && st->BootServices && st->BootServices->LocateProtocol) {
+        if (st->BootServices->LocateProtocol(
+                (EFI_GUID *)&abs_pointer_guid, 0, (void **)&abs_pointer_proto) == EFI_SUCCESS) {
+            if (abs_pointer_proto && abs_pointer_proto->Reset)
+                abs_pointer_proto->Reset(abs_pointer_proto, 0);
+            xiao_serial_print(0, "UEFI: AbsolutePointer located\r\n");
+        } else {
+            abs_pointer_proto = 0;
+        }
     }
+
+    if (abs_pointer_proto) {
+        EFI_ABSOLUTE_POINTER_STATE state;
+        if (abs_pointer_proto->GetState(abs_pointer_proto, &state) == EFI_SUCCESS) {
+            EFI_ABSOLUTE_POINTER_MODE *mode = abs_pointer_proto->Mode;
+            if (mode) {
+                UINTN range_x = mode->AbsoluteMaxX > mode->AbsoluteMinX
+                                ? mode->AbsoluteMaxX - mode->AbsoluteMinX : 1;
+                UINTN range_y = mode->AbsoluteMaxY > mode->AbsoluteMinY
+                                ? mode->AbsoluteMaxY - mode->AbsoluteMinY : 1;
+                UINTN cx = state.CurrentX > mode->AbsoluteMinX
+                           ? state.CurrentX - mode->AbsoluteMinX : 0;
+                UINTN cy = state.CurrentY > mode->AbsoluteMinY
+                           ? state.CurrentY - mode->AbsoluteMinY : 0;
+                mouse_x = (int)((UINTN)sw * cx / range_x);
+                mouse_y = (int)((UINTN)sh * cy / range_y);
+                if (mouse_x >= sw) mouse_x = sw - 1;
+                if (mouse_y >= sh) mouse_y = sh - 1;
+            }
+            mouse_btns = 0;
+            if (state.ActiveButtons & 1) mouse_btns |= 1;
+            if (state.ActiveButtons & 2) mouse_btns |= 2;
+        }
+        if (out) { out->x = mouse_x; out->y = mouse_y; out->buttons = mouse_btns; }
+        return 0;
+    }
+
+    /* ----------------------------------------------------------------
+     * フォールバック: EFI_SIMPLE_POINTER_PROTOCOL (usb-mouse / PS/2)
+     * RelativeMovement は Mode->Resolution[XY] カウント/mm 単位なので
+     * ピクセルへ変換するために割り算が必要
+     * ---------------------------------------------------------------- */
+    if (!pointer_proto && st && st->BootServices && st->BootServices->LocateProtocol) {
+        if (st->BootServices->LocateProtocol(
+                (EFI_GUID *)&pointer_guid, 0, (void **)&pointer_proto) == EFI_SUCCESS) {
+            if (pointer_proto && pointer_proto->Reset)
+                pointer_proto->Reset(pointer_proto, 0);
+            xiao_serial_print(0, "UEFI: SimplePointer located\r\n");
+        } else {
+            pointer_proto = 0;
+        }
+    }
+
+    if (pointer_proto) {
+        EFI_SIMPLE_POINTER_STATE state;
+        /* Mode->ResolutionX/Y = カウント数/mm。これで割ると mm 単位になる。
+         * さらに画面 DPI に合わせた感度係数 (4 px/mm ≈ 96dpi) を掛ける。 */
+        UINTN res_x = 1, res_y = 1;
+        if (pointer_proto->Mode) {
+            if (pointer_proto->Mode->ResolutionX > 0) res_x = pointer_proto->Mode->ResolutionX;
+            if (pointer_proto->Mode->ResolutionY > 0) res_y = pointer_proto->Mode->ResolutionY;
+        }
+        {
+            int poll_count = 0;
+            while (poll_count < 16 &&
+                   pointer_proto->GetState(pointer_proto, &state) == EFI_SUCCESS) {
+                /* counts → mm → pixel (4 px/mm 感度) */
+                int dx = (int)(state.RelativeMovementX / (INT64)res_x) * 4;
+                int dy = (int)(state.RelativeMovementY / (INT64)res_y) * 4;
+                mouse_x += dx;
+                mouse_y += dy;
+                if (mouse_x < 0) mouse_x = 0;
+                if (mouse_y < 0) mouse_y = 0;
+                if (mouse_x >= sw) mouse_x = sw - 1;
+                if (mouse_y >= sh) mouse_y = sh - 1;
+                mouse_btns = 0;
+                if (state.LeftButton)  mouse_btns |= 1;
+                if (state.RightButton) mouse_btns |= 2;
+                poll_count++;
+            }
+        }
+    }
+
+    if (out) { out->x = mouse_x; out->y = mouse_y; out->buttons = mouse_btns; }
     return 0;
 }
 
@@ -578,13 +641,19 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     st = system_table;
     serial_init();
 
-    // Early locate pointer to see if it exists
+    // Early locate: AbsolutePointer (usb-tablet) preferred, SimplePointer fallback
     if (st && st->BootServices && st->BootServices->LocateProtocol) {
-        if (st->BootServices->LocateProtocol((EFI_GUID *)&pointer_guid, 0, (void **)&pointer_proto) == EFI_SUCCESS) {
-            if (pointer_proto && pointer_proto->Reset) pointer_proto->Reset(pointer_proto, 0);
-            xiao_serial_print(0, "UEFI: Pointer protocol located at startup\r\n");
+        if (st->BootServices->LocateProtocol((EFI_GUID *)&abs_pointer_guid, 0, (void **)&abs_pointer_proto) == EFI_SUCCESS) {
+            if (abs_pointer_proto && abs_pointer_proto->Reset) abs_pointer_proto->Reset(abs_pointer_proto, 0);
+            xiao_serial_print(0, "UEFI: AbsolutePointer protocol located at startup\r\n");
         } else {
-            xiao_serial_print(0, "UEFI: Pointer protocol NOT found at startup\r\n");
+            abs_pointer_proto = 0;
+            if (st->BootServices->LocateProtocol((EFI_GUID *)&pointer_guid, 0, (void **)&pointer_proto) == EFI_SUCCESS) {
+                if (pointer_proto && pointer_proto->Reset) pointer_proto->Reset(pointer_proto, 0);
+                xiao_serial_print(0, "UEFI: SimplePointer protocol located at startup\r\n");
+            } else {
+                xiao_serial_print(0, "UEFI: No pointer protocol found at startup\r\n");
+            }
         }
     }
 

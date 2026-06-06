@@ -5,10 +5,10 @@ typedef unsigned short u16;
 typedef unsigned int u32;
 
 #define COM1 0x3f8
-#define VGA_W 80
-#define VGA_H 25
+#define VGA_W 320
+#define VGA_H 200
 
-static u16 *const vga = (u16 *)0xb8000;
+static u8 *const vga = (u8 *)0xa0000;
 static u32 row;
 static u32 col;
 static int esc_state;
@@ -53,13 +53,13 @@ static void scroll_if_needed(void) {
     u32 i;
     if (row < VGA_H) return;
     for (i = 0; i < (VGA_H - 1) * VGA_W; i++) vga[i] = vga[i + VGA_W];
-    for (i = (VGA_H - 1) * VGA_W; i < VGA_H * VGA_W; i++) vga[i] = 0x0720;
+    for (i = (VGA_H - 1) * VGA_W; i < VGA_H * VGA_W; i++) vga[i] = 0x00;
     row = VGA_H - 1;
 }
 
 static void console_clear(void) {
     u32 i;
-    for (i = 0; i < VGA_W * VGA_H; i++) vga[i] = 0x0720;
+    for (i = 0; i < VGA_W * VGA_H; i++) vga[i] = 0x00;
     row = 0;
     col = 0;
 }
@@ -98,16 +98,14 @@ static void console_putc(char c) {
 
     if (c == '\r') return;
     if (c == '\n') {
-        row++;
+        row += 8;
         col = 0;
         scroll_if_needed();
         return;
     }
-    vga[row * VGA_W + col] = (u16)(0x0700 | (u8)c);
-    col++;
-    if (col >= VGA_W) {
+    if (col + 8 >= VGA_W) {
         col = 0;
-        row++;
+        row += 8;
         scroll_if_needed();
     }
 }
@@ -274,18 +272,20 @@ static u8 bios_color_bg(unsigned int rgb888) {
     u8 r = (u8)((rgb888 >> 16) & 0xff);
     u8 g = (u8)((rgb888 >> 8) & 0xff);
     u8 b = (u8)(rgb888 & 0xff);
-    u8 bg = 0;
-    if (r >= 96) bg |= 0x4;
-    if (g >= 96) bg |= 0x2;
-    if (b >= 96) bg |= 0x1;
-    return bg;
+    if (r > 220 && g > 220 && b > 220) return 0x0f; /* white */
+    if (r > 220 && g > 220) return 0x0e;             /* yellow */
+    if (r > 220 && b > 220) return 0x0d;             /* magenta */
+    if (g > 220 && b > 220) return 0x0b;             /* cyan */
+    if (r > 220) return 0x04;                        /* red */
+    if (g > 220) return 0x02;                        /* green */
+    if (b > 220) return 0x01;                        /* blue */
+    if (r > 96 || g > 96 || b > 96) return 0x08;     /* bright gray */
+    return 0x00;                                     /* black */
 }
 
 static int bios_video_draw_pixel_rgb888(int x, int y, unsigned int rgb888) {
-    u8 bg;
     if (x < 0 || y < 0 || x >= VGA_W || y >= VGA_H) return -1;
-    bg = bios_color_bg(rgb888);
-    vga[y * VGA_W + x] = (u16)(((u16)bg << 12) | 0x0020);
+    vga[y * VGA_W + x] = bios_color_bg(rgb888);
     return 0;
 }
 
@@ -303,7 +303,7 @@ static int bios_video_fill_rect_rgb888(int x, int y, int w, int h, unsigned int 
 static int bios_video_fill_rgb888(unsigned int rgb888) {
     u32 i;
     u8 bg = bios_color_bg(rgb888);
-    for (i = 0; i < VGA_W * VGA_H; i++) vga[i] = (u16)(((u16)bg << 12) | 0x0020);
+    for (i = 0; i < VGA_W * VGA_H; i++) vga[i] = bg;
     row = 0;
     col = 0;
     return 0;

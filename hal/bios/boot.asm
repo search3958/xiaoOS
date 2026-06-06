@@ -15,6 +15,11 @@ start:
     mov [boot_drive], dl
     sti
 
+    mov ax, 0x0013
+    int 0x10
+
+    call set_palette
+
     call serial_init
 
     mov dl, [boot_drive]
@@ -92,6 +97,34 @@ serial_print:
     call serial_putc
     jmp serial_print
 .done:
+    ret
+
+set_palette:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    mov dx, 0x3c8
+    xor al, al
+    out dx, al
+    inc dx
+
+    xor bx, bx
+.palette_loop:
+    mov al, bl
+    shr al, 2
+    out dx, al
+    out dx, al
+    out dx, al
+    inc bx
+    cmp bx, 256
+    jne .palette_loop
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 boot_drive: db 0

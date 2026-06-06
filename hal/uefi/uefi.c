@@ -684,6 +684,18 @@ static void uefi_mouse_reset(void) {
     }
 }
 
+static void uefi_mouse_move(int dx, int dy) {
+    (void)dx; (void)dy;
+}
+
+static void uefi_mouse_set_buttons(int buttons) {
+    (void)buttons;
+}
+
+static int uefi_get_ctrl(void) {
+    return 0;
+}
+
 static const xiao_hal uefi_hal = {
     uefi_serial_write,
     uefi_console_write,
@@ -699,6 +711,9 @@ static const xiao_hal uefi_hal = {
     uefi_video_blit_rgb888,
     uefi_mouse_get,
     uefi_mouse_reset,
+    uefi_mouse_move,
+    uefi_mouse_set_buttons,
+    uefi_get_ctrl,
 };
 
 int xiao_uefi_reboot(void) {

@@ -145,7 +145,7 @@ static void *ttf_memcpy(void *dst, const void *src, xiao_size n) {
     return dst;
 }
 
-static void *ttf_memset(void *dst, int value, xiao_size n) {
+void *memset(void *dst, int value, xiao_size n) {
     xiao_size i;
     unsigned char *d = (unsigned char *)dst;
     for (i = 0; i < n; i++) d[i] = (unsigned char)value;
@@ -222,7 +222,7 @@ static float ttf_acos(float x) {
 #define STBTT_free(x,u) ttf_free((x), (u))
 #define STBTT_strlen(x) xstrlen((x))
 #define STBTT_memcpy(d,s,n) ttf_memcpy((d), (s), (n))
-#define STBTT_memset(d,v,n) ttf_memset((d), (v), (n))
+#define STBTT_memset(d,v,n) memset((d), (v), (n))
 #define STBTT_ifloor(x) ttf_ifloor((float)(x))
 #define STBTT_iceil(x) ttf_iceil((float)(x))
 #define STBTT_sqrt(x) ttf_sqrt((float)(x))
@@ -261,6 +261,9 @@ typedef struct {
     int input_row;
     int prev_input_len;
     char prev_input[TERM_INPUT_MAX + 1];
+    char history[5][TERM_INPUT_MAX + 1];
+    int history_count;
+    int history_idx;
     int row_cache_len[TERM_LINE_COUNT];
     unsigned char row_cache_kind[TERM_LINE_COUNT];
     char row_cache_text[TERM_LINE_COUNT][TERM_LINE_MAX];
@@ -788,6 +791,8 @@ static int run_text_terminal(xiao_env *env) {
 
     xiao_console_print(env, "xiao terminal ready\r\n");
     xiao_console_print(env, "type command (example: ls, cat readme.txt), or 'exit'\r\n");
+    char history[5][128] = {0};
+    int h_idx = 0, h_cnt = 0;
 
     while (1) {
         int ch;
@@ -798,6 +803,17 @@ static int run_text_terminal(xiao_env *env) {
             ch = xiao_input_read(env);
             if (ch < 0) {
                 xiao_wait(env, 10);
+                continue;
+            }
+            if (ch == 0x10) { // Ctrl+P / Up
+                if (h_cnt > 0) {
+                    while (n > 0) { xiao_console_print(env, "\b \b"); n--; }
+                    h_idx = (h_idx - 1 + h_cnt) % h_cnt;
+                    xiao_size len = xstrlen(history[h_idx]);
+                    for(xiao_size i=0; i<len; i++) line[n++] = history[h_idx][i];
+                    line[n] = 0;
+                    xiao_console_print(env, line);
+                }
                 continue;
             }
             if (ch == '\r' || ch == '\n') {
@@ -821,6 +837,12 @@ static int run_text_terminal(xiao_env *env) {
         }
 
         line[n] = 0;
+        if (n > 0) {
+            xiao_size len = xstrlen(line);
+            for(xiao_size i=0; i<len && i<127; i++) history[h_cnt % 5][i] = line[i];
+            history[h_cnt % 5][(len < 127) ? len : 127] = 0;
+            h_cnt++;
+        }
         if (n == 0) continue;
         action = terminal_action_for_line(line);
         if (action != TERM_ACTION_NONE) return action;

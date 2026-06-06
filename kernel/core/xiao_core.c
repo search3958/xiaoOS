@@ -10,6 +10,12 @@
 #define XIAO_MAX_MSG_QUEUE 4
 
 typedef struct {
+    int mousekeys_enabled;
+} xiao_settings;
+
+static xiao_settings global_settings = {1}; // Enabled by default
+
+typedef struct {
     const xiao_app *app;
     int active;
     xiao_ipc_message msg_queue[XIAO_MAX_MSG_QUEUE];
@@ -526,8 +532,27 @@ void xiao_console_write(xiao_env *env, const char *data, xiao_size len) {
     }
 }
 
+void xiao_mouse_move(xiao_env *env, int dx, int dy) {
+    if (env && env->hal && env->hal->mouse_move) env->hal->mouse_move(dx, dy);
+}
+
+void xiao_mouse_click(xiao_env *env, int buttons) {
+    if (env && env->hal && env->hal->mouse_set_buttons) env->hal->mouse_set_buttons(buttons);
+}
+
 int xiao_input_read(xiao_env *env) {
-    if (env && env->hal && env->hal->input_read) return env->hal->input_read();
+    if (env && env->hal && env->hal->input_read) {
+        if (xiao_settings_get_mousekeys() && xiao_get_ctrl(env)) {
+            int ch = env->hal->input_read();
+            if (ch == 'w') { xiao_mouse_move(env, 0, 1); return -1; }
+            if (ch == 'a') { xiao_mouse_move(env, -1, 0); return -1; }
+            if (ch == 's') { xiao_mouse_move(env, 0, -1); return -1; }
+            if (ch == 'd') { xiao_mouse_move(env, 1, 0); return -1; }
+            if (ch == 'c') { xiao_mouse_click(env, 1); xiao_wait(env, 50); xiao_mouse_click(env, 0); return -1; }
+            return ch;
+        }
+        return env->hal->input_read();
+    }
     return -1;
 }
 
@@ -961,4 +986,17 @@ int xiao_ipc_receive(xiao_ipc_message *out_msg) {
 void xiao_console_set_sink(xiao_console_sink_fn sink, void *ctx) {
     console_sink = sink;
     console_sink_ctx = ctx;
+}
+
+int xiao_settings_get_mousekeys(void) {
+    return global_settings.mousekeys_enabled;
+}
+
+void xiao_settings_set_mousekeys(int enabled) {
+    global_settings.mousekeys_enabled = enabled;
+}
+
+int xiao_get_ctrl(xiao_env *env) {
+    if (env && env->hal && env->hal->get_ctrl) return env->hal->get_ctrl();
+    return 0;
 }

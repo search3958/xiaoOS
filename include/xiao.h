@@ -62,6 +62,9 @@ typedef struct {
     int (*video_blit_rgb888)(int x, int y, int w, int h, const unsigned int *pixels, int stride);
     int (*mouse_get)(xiao_mouse_state *out);
     void (*mouse_reset)(void);
+    void (*mouse_move)(int dx, int dy);
+    void (*mouse_set_buttons)(int buttons);
+    int (*get_ctrl)(void);
 } xiao_hal;
 
 struct xiao_env {
@@ -122,6 +125,8 @@ void xiao_wait(xiao_env *env, xiao_tick ms);
 void xiao_yield(xiao_env *env);
 int xiao_mouse_get(xiao_env *env, xiao_mouse_state *out);
 void xiao_mouse_reset(xiao_env *env);
+void xiao_mouse_move(xiao_env *env, int dx, int dy);
+void xiao_mouse_click(xiao_env *env, int buttons);
 int xiao_video_fill_rgb888(xiao_env *env, unsigned int rgb888);
 int xiao_video_draw_pixel_rgb888(xiao_env *env, int x, int y, unsigned int rgb888);
 int xiao_video_fill_rect_rgb888(xiao_env *env, int x, int y, int w, int h, unsigned int rgb888);
@@ -135,6 +140,10 @@ int xiao_ipc_send(const char *target_app, unsigned int type, unsigned int size, 
 int xiao_ipc_receive(xiao_ipc_message *out_msg);
 
 void xiao_console_set_sink(xiao_console_sink_fn sink, void *ctx);
+
+int xiao_settings_get_mousekeys(void);
+void xiao_settings_set_mousekeys(int enabled);
+int xiao_get_ctrl(xiao_env *env);
 
 extern const xiao_boot_image xiao_image;
 

@@ -126,6 +126,12 @@ static int mouse_cycle = 0;
 static u8 mouse_bytes[3];
 static int mouse_init_done = 0;
 
+static int ctrl_pressed = 0;
+
+int bios_get_ctrl(void) {
+    return ctrl_pressed;
+}
+
 static int bios_input_read(void) {
     static unsigned char kbd_us[128] = {
         0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
@@ -135,11 +141,16 @@ static int bios_input_read(void) {
     };
 
     if (inb(0x64) & 1) {
-        u8 status = inb(0x64);
         u8 b = inb(0x60);
-        if (!(status & 0x20)) {
-            if (b < 128 && kbd_us[b]) return (int)kbd_us[b];
+        if (b == 0x1d) { // Ctrl press
+            ctrl_pressed = 1;
+            return -1;
+        } else if (b == 0x9d) { // Ctrl release
+            ctrl_pressed = 0;
+            return -1;
         }
+
+        if (b < 128 && kbd_us[b]) return (int)kbd_us[b];
     }
     return -1;
 }
@@ -322,6 +333,19 @@ static int bios_video_set_mode(int w, int h) {
     return -1;
 }
 
+static void bios_mouse_move(int dx, int dy) {
+    mouse_x += dx;
+    mouse_y -= dy;
+    if (mouse_x < 0) mouse_x = 0;
+    if (mouse_y < 0) mouse_y = 0;
+    if (mouse_x >= VGA_W) mouse_x = VGA_W - 1;
+    if (mouse_y >= VGA_H) mouse_y = VGA_H - 1;
+}
+
+static void bios_mouse_set_buttons(int buttons) {
+    mouse_btns = buttons;
+}
+
 static const xiao_hal bios_hal = {
     bios_serial_write,
     bios_console_write,
@@ -337,6 +361,9 @@ static const xiao_hal bios_hal = {
     0,
     bios_mouse_get,
     mouse_init,
+    bios_mouse_move,
+    bios_mouse_set_buttons,
+    bios_get_ctrl,
 };
 
 void xiao_bios_main(void) {

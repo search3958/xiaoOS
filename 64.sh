@@ -2,7 +2,21 @@
 set -eu
 
 cd "$(dirname "$0")"
-make uefi
+
+mode="${1:-uefi}"
+case "$mode" in
+    bios|uefi) ;;
+    *)
+        echo "usage: $0 [bios|uefi]" >&2
+        exit 1
+        ;;
+esac
+
+if [ "$mode" = bios ]; then
+    make bios
+else
+    make uefi
+fi
 
 detect_default_accel() {
     os="$(uname -s)"
@@ -25,7 +39,16 @@ detect_default_accel() {
     esac
 }
 
+detect_default_display() {
+    case "$(uname -s)" in
+        Darwin) printf 'cocoa\n' ;;
+        Linux) printf 'gtk\n' ;;
+        *) printf 'default\n' ;;
+    esac
+}
+
 QEMU_ACCEL="${QEMU_ACCEL:-$(detect_default_accel)}"
+QEMU_DISPLAY="${QEMU_DISPLAY:-$(detect_default_display)}"
 
 find_file() {
     for path in "$@"; do
@@ -36,6 +59,18 @@ find_file() {
     done
     return 1
 }
+
+if [ "$mode" = bios ]; then
+    exec qemu-system-i386 \
+        -machine pc \
+        -accel "$QEMU_ACCEL" \
+        -m 512M \
+        -display "$QEMU_DISPLAY" \
+        -vga std \
+        -drive file=build/bios/xiao-bios.img,format=raw \
+        -monitor none \
+        -no-reboot
+fi
 
 brew_qemu_share=""
 if command -v brew >/dev/null 2>&1; then
@@ -77,11 +112,12 @@ exec qemu-system-x86_64 \
     -machine q35 \
     -accel "$QEMU_ACCEL" \
     -m 512M \
+    -display "$QEMU_DISPLAY" \
     -drive if=pflash,format=raw,readonly=on,file="$code" \
     -drive if=ide,file=fat:rw:build/uefi/esp,format=raw \
     -device qemu-xhci \
     -device usb-tablet \
+    -device usb-mouse \
     -device usb-kbd \
-    -serial stdio \
     -monitor none \
     -no-reboot

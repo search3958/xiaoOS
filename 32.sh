@@ -2,7 +2,21 @@
 set -eu
 
 cd "$(dirname "$0")"
-make bios
+
+mode="${1:-bios}"
+case "$mode" in
+    bios|uefi) ;;
+    *)
+        echo "usage: $0 [bios|uefi]" >&2
+        exit 1
+        ;;
+esac
+
+if [ "$mode" = bios ]; then
+    make bios
+else
+    make uefi
+fi
 
 detect_default_accel() {
     os="$(uname -s)"
@@ -25,15 +39,16 @@ detect_default_accel() {
     esac
 }
 
-QEMU_ACCEL="${QEMU_ACCEL:-$(detect_default_accel)}"
-QEMU_DISPLAY="${QEMU_DISPLAY:-}"
-if [ -z "$QEMU_DISPLAY" ]; then
+detect_default_display() {
     case "$(uname -s)" in
-        Darwin) QEMU_DISPLAY="cocoa" ;;
-        Linux) QEMU_DISPLAY="gtk" ;;
-        *) QEMU_DISPLAY="default" ;;
+        Darwin) printf 'cocoa\n' ;;
+        Linux) printf 'gtk\n' ;;
+        *) printf 'default\n' ;;
     esac
-fi
+}
+
+QEMU_ACCEL="${QEMU_ACCEL:-$(detect_default_accel)}"
+QEMU_DISPLAY="${QEMU_DISPLAY:-$(detect_default_display)}"
 
 find_file() {
     for path in "$@"; do
@@ -45,10 +60,64 @@ find_file() {
     return 1
 }
 
-exec qemu-system-i386 \
+if [ "$mode" = bios ]; then
+    exec qemu-system-i386 \
+        -machine pc \
+        -accel "$QEMU_ACCEL" \
+        -m 512M \
+        -display "$QEMU_DISPLAY" \
+        -vga std \
+        -drive file=build/bios/xiao-bios.img,format=raw \
+        -monitor none \
+        -no-reboot
+fi
+
+brew_qemu_share=""
+if command -v brew >/dev/null 2>&1; then
+    brew_qemu_share="$(brew --prefix qemu 2>/dev/null || true)/share/qemu"
+fi
+
+code="$(find_file \
+    "${QEMU_EFI_CODE:-}" \
+    "${QEMU_SHARE:-}/edk2-x86_64-code.fd" \
+    "${QEMU_SHARE:-}/OVMF_CODE.fd" \
+    "${QEMU_SHARE:-}/OVMF_CODE_4M.fd" \
+    "$brew_qemu_share/edk2-x86_64-code.fd" \
+    "$brew_qemu_share/OVMF_CODE.fd" \
+    "$brew_qemu_share/OVMF_CODE_4M.fd" \
+    "/opt/homebrew/share/qemu/edk2-x86_64-code.fd" \
+    "/opt/homebrew/share/qemu/OVMF_CODE.fd" \
+    "/opt/homebrew/share/qemu/OVMF_CODE_4M.fd" \
+    "/usr/local/share/qemu/edk2-x86_64-code.fd" \
+    "/usr/local/share/qemu/OVMF_CODE.fd" \
+    "/usr/local/share/qemu/OVMF_CODE_4M.fd" \
+    "/usr/share/qemu/edk2-x86_64-code.fd" \
+    "/usr/share/qemu/OVMF_CODE.fd" \
+    "/usr/share/qemu/OVMF_CODE_4M.fd" \
+    "/usr/share/OVMF/OVMF_CODE.fd" \
+    "/usr/share/OVMF/OVMF_CODE_4M.fd" \
+    "/usr/share/edk2/ovmf/OVMF_CODE.fd" \
+    "/usr/share/edk2/ovmf/OVMF_CODE.4m.fd" \
+    "/usr/share/edk2/x64/OVMF_CODE.fd" \
+    "/usr/share/edk2/x64/OVMF_CODE.4m.fd" \
+    || true)"
+
+if [ -z "$code" ]; then
+    echo "x86_64 UEFI firmware not found." >&2
+    echo "Set QEMU_EFI_CODE=/path/to/OVMF_CODE.fd and retry." >&2
+    exit 1
+fi
+
+exec qemu-system-x86_64 \
+    -machine q35 \
     -accel "$QEMU_ACCEL" \
     -m 512M \
     -display "$QEMU_DISPLAY" \
-    -drive file=build/bios/xiao-bios.img,format=raw \
+    -drive if=pflash,format=raw,readonly=on,file="$code" \
+    -drive if=ide,file=fat:rw:build/uefi/esp,format=raw \
+    -device qemu-xhci \
+    -device usb-tablet \
+    -device usb-mouse \
+    -device usb-kbd \
     -monitor none \
     -no-reboot

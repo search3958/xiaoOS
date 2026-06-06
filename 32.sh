@@ -119,5 +119,6 @@ exec qemu-system-x86_64 \
     -device usb-tablet \
     -device usb-mouse \
     -device usb-kbd \
+    -serial stdio \
     -monitor none \
     -no-reboot

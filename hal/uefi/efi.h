@@ -1,6 +1,12 @@
 #ifndef XIAO_EFI_H
 #define XIAO_EFI_H
 
+#ifdef _MSC_VER
+#define EFIAPI __cdecl
+#else
+#define EFIAPI __attribute__((ms_abi))
+#endif
+
 typedef unsigned short CHAR16;
 typedef unsigned long long UINTN;
 typedef unsigned long long EFI_STATUS;
@@ -31,22 +37,22 @@ typedef struct {
 struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
 struct SIMPLE_TEXT_OUTPUT_MODE;
 
-typedef EFI_STATUS (*EFI_TEXT_STRING)(
+typedef EFI_STATUS (EFIAPI *EFI_TEXT_STRING)(
     struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *self,
     CHAR16 *string
 );
 
-typedef EFI_STATUS (*EFI_TEXT_CLEAR_SCREEN)(
+typedef EFI_STATUS (EFIAPI *EFI_TEXT_CLEAR_SCREEN)(
     struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *self
 );
 
-typedef EFI_STATUS (*EFI_TEXT_SET_CURSOR_POSITION)(
+typedef EFI_STATUS (EFIAPI *EFI_TEXT_SET_CURSOR_POSITION)(
     struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *self,
     UINTN column,
     UINTN row
 );
 
-typedef EFI_STATUS (*EFI_TEXT_SET_ATTRIBUTE)(
+typedef EFI_STATUS (EFIAPI *EFI_TEXT_SET_ATTRIBUTE)(
     struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *self,
     UINTN attribute
 );
@@ -64,14 +70,31 @@ typedef struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL {
     struct SIMPLE_TEXT_OUTPUT_MODE *Mode;
 } EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
 
-typedef EFI_STATUS (*EFI_LOCATE_PROTOCOL)(
+typedef EFI_STATUS (EFIAPI *EFI_LOCATE_PROTOCOL)(
     EFI_GUID *Protocol,
     void *Registration,
     void **Interface
 );
 
-typedef EFI_STATUS (*EFI_FREE_POOL)(
+typedef EFI_STATUS (EFIAPI *EFI_FREE_POOL)(
     void *Buffer
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_LOCATE_HANDLE_BUFFER)(
+    UINTN SearchType,
+    EFI_GUID *Protocol,
+    void *SearchKey,
+    UINTN *NoHandles,
+    EFI_HANDLE **Buffer
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_OPEN_PROTOCOL)(
+    EFI_HANDLE Handle,
+    EFI_GUID *Protocol,
+    void **Interface,
+    EFI_HANDLE AgentHandle,
+    EFI_HANDLE ControllerHandle,
+    UINT32 Attributes
 );
 
 typedef struct EFI_BOOT_SERVICES {
@@ -108,11 +131,11 @@ typedef struct EFI_BOOT_SERVICES {
     void *SetWatchdogTimer;
     void *ConnectController;
     void *DisconnectController;
-    void *OpenProtocol;
+    EFI_OPEN_PROTOCOL OpenProtocol;
     void *CloseProtocol;
     void *OpenProtocolInformation;
     void *ProtocolsPerHandle;
-    void *LocateHandleBuffer;
+    EFI_LOCATE_HANDLE_BUFFER LocateHandleBuffer;
     EFI_LOCATE_PROTOCOL LocateProtocol;
     void *InstallMultipleProtocolInterfaces;
     void *UninstallMultipleProtocolInterfaces;
@@ -219,12 +242,12 @@ typedef struct {
 
 struct EFI_SIMPLE_POINTER_PROTOCOL;
 
-typedef EFI_STATUS (*EFI_SIMPLE_POINTER_RESET)(
+typedef EFI_STATUS (EFIAPI *EFI_SIMPLE_POINTER_RESET)(
     struct EFI_SIMPLE_POINTER_PROTOCOL *This,
     BOOLEAN ExtendedVerification
 );
 
-typedef EFI_STATUS (*EFI_SIMPLE_POINTER_GET_STATE)(
+typedef EFI_STATUS (EFIAPI *EFI_SIMPLE_POINTER_GET_STATE)(
     struct EFI_SIMPLE_POINTER_PROTOCOL *This,
     EFI_SIMPLE_POINTER_STATE *State
 );
@@ -274,12 +297,12 @@ typedef struct {
 
 struct EFI_ABSOLUTE_POINTER_PROTOCOL;
 
-typedef EFI_STATUS (*EFI_ABSOLUTE_POINTER_RESET)(
+typedef EFI_STATUS (EFIAPI *EFI_ABSOLUTE_POINTER_RESET)(
     struct EFI_ABSOLUTE_POINTER_PROTOCOL *This,
     BOOLEAN ExtendedVerification
 );
 
-typedef EFI_STATUS (*EFI_ABSOLUTE_POINTER_GET_STATE)(
+typedef EFI_STATUS (EFIAPI *EFI_ABSOLUTE_POINTER_GET_STATE)(
     struct EFI_ABSOLUTE_POINTER_PROTOCOL *This,
     EFI_ABSOLUTE_POINTER_STATE *State
 );

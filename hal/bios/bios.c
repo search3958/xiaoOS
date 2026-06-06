@@ -134,34 +134,10 @@ static int bios_input_read(void) {
         'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
     };
 
-    if ((inb(COM1 + 5) & 0x01) != 0) return (int)inb(COM1);
-
     if (inb(0x64) & 1) {
         u8 status = inb(0x64);
         u8 b = inb(0x60);
-        if (status & 0x20) {
-            // Mouse data - handle it or buffer it
-            // For simplicity, we just process it here if it's mouse data
-            if (mouse_cycle == 0 && !(b & 0x08)) return -1;
-            mouse_bytes[mouse_cycle++] = b;
-            if (mouse_cycle == 3) {
-                mouse_cycle = 0;
-                if (!(mouse_bytes[0] & 0x80 || mouse_bytes[0] & 0x40)) {
-                    int dx = (int)mouse_bytes[1];
-                    int dy = (int)mouse_bytes[2];
-                    if (mouse_bytes[0] & 0x10) dx -= 256;
-                    if (mouse_bytes[0] & 0x20) dy -= 256;
-                    mouse_x += dx; mouse_y -= dy;
-                    if (mouse_x < 0) mouse_x = 0;
-                    if (mouse_y < 0) mouse_y = 0;
-                    if (mouse_x >= VGA_W) mouse_x = VGA_W - 1;
-                    if (mouse_y >= VGA_H) mouse_y = VGA_H - 1;
-                    mouse_btns = mouse_bytes[0] & 0x07;
-                }
-            }
-            return -1;
-        } else {
-            // Keyboard data
+        if (!(status & 0x20)) {
             if (b < 128 && kbd_us[b]) return (int)kbd_us[b];
         }
     }
@@ -238,16 +214,13 @@ static void mouse_poll(void) {
     
     // Limit loops to prevent hanging if mouse sends too much
     int limit = 20;
-    while (limit-- > 0 && (inb(0x64) & 1)) {
+    while (limit-- > 0) {
         u8 status = inb(0x64);
+        if (!(status & 1)) break;
         u8 b = inb(0x60);
-        
-        // Only process if it's mouse data
         if (!(status & 0x20)) {
-            continue; 
+            continue;
         }
-        
-        // Packet sync: first byte must have bit 3 set
         if (mouse_cycle == 0 && !(b & 0x08)) {
             continue;
         }

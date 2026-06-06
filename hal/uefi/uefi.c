@@ -209,7 +209,6 @@ static void uefi_yield(void) {
 
 static int uefi_mouse_get(xiao_mouse_state *out) {
     int sw = 1280, sh = 720;
-    int absolute_ready = 0;
     uefi_video_size(&sw, &sh);
     if (sw <= 0) sw = 1280;
     if (sh <= 0) sh = 720;
@@ -224,10 +223,6 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
         mouse_initialized = 1;
     }
 
-    /* ----------------------------------------------------------------
-     * 優先: EFI_ABSOLUTE_POINTER_PROTOCOL (usb-tablet が登録するもの)
-     * macOS+QEMU ではマウスグラブ不要でこちらにイベントが来る
-     * ---------------------------------------------------------------- */
     if (!abs_pointer_proto && st && st->BootServices && st->BootServices->LocateProtocol) {
         if (uefi_locate_pointer_protocol((EFI_GUID *)&abs_pointer_guid, (void **)&abs_pointer_proto) == EFI_SUCCESS) {
             if (abs_pointer_proto && abs_pointer_proto->Reset)
@@ -259,18 +254,15 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
             mouse_btns = 0;
             if (state.ActiveButtons & 1) mouse_btns |= 1;
             if (state.ActiveButtons & 2) mouse_btns |= 2;
-            absolute_ready = 1;
         }
-        if (absolute_ready) {
-            if (out) { out->x = mouse_x; out->y = mouse_y; out->buttons = mouse_btns; }
-            return 0;
-        }
+        if (out) { out->x = mouse_x; out->y = mouse_y; out->buttons = mouse_btns; }
+        return 0;
     }
 
     /* ----------------------------------------------------------------
      * フォールバック: EFI_SIMPLE_POINTER_PROTOCOL (usb-mouse / PS/2)
-     * RelativeMovement は Mode->Resolution[XY] カウント/mm 単位なので
-     * ピクセルへ変換するために割り算が必要
+     * RelativeMovement は符号付きの相対量なので、そのまま使って
+     * 感度だけ軽く抑える。
      * ---------------------------------------------------------------- */
     if (!pointer_proto && st && st->BootServices && st->BootServices->LocateProtocol) {
         if (uefi_locate_pointer_protocol((EFI_GUID *)&pointer_guid, (void **)&pointer_proto) == EFI_SUCCESS) {
@@ -284,31 +276,21 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
 
     if (pointer_proto) {
         EFI_SIMPLE_POINTER_STATE state;
-        /* Mode->ResolutionX/Y = カウント数/mm。これで割ると mm 単位になる。
-         * さらに画面 DPI に合わせた感度係数 (4 px/mm ≈ 96dpi) を掛ける。 */
-        UINTN res_x = 1, res_y = 1;
-        if (pointer_proto->Mode) {
-            if (pointer_proto->Mode->ResolutionX > 0) res_x = pointer_proto->Mode->ResolutionX;
-            if (pointer_proto->Mode->ResolutionY > 0) res_y = pointer_proto->Mode->ResolutionY;
-        }
-        {
-            int poll_count = 0;
-            while (poll_count < 16 &&
-                   pointer_proto->GetState(pointer_proto, &state) == EFI_SUCCESS) {
-                /* counts → mm → pixel (4 px/mm 感度) */
-                int dx = (int)(state.RelativeMovementX / (INT64)res_x) * 4;
-                int dy = (int)(state.RelativeMovementY / (INT64)res_y) * 4;
-                mouse_x += dx;
-                mouse_y += dy;
-                if (mouse_x < 0) mouse_x = 0;
-                if (mouse_y < 0) mouse_y = 0;
-                if (mouse_x >= sw) mouse_x = sw - 1;
-                if (mouse_y >= sh) mouse_y = sh - 1;
-                mouse_btns = 0;
-                if (state.LeftButton)  mouse_btns |= 1;
-                if (state.RightButton) mouse_btns |= 2;
-                poll_count++;
-            }
+        int poll_count = 0;
+        while (poll_count < 16 &&
+               pointer_proto->GetState(pointer_proto, &state) == EFI_SUCCESS) {
+            int dx = (int)state.RelativeMovementX;
+            int dy = (int)state.RelativeMovementY;
+            mouse_x += dx;
+            mouse_y += dy;
+            if (mouse_x < 0) mouse_x = 0;
+            if (mouse_y < 0) mouse_y = 0;
+            if (mouse_x >= sw) mouse_x = sw - 1;
+            if (mouse_y >= sh) mouse_y = sh - 1;
+            mouse_btns = 0;
+            if (state.LeftButton)  mouse_btns |= 1;
+            if (state.RightButton) mouse_btns |= 2;
+            poll_count++;
         }
     }
 

@@ -35,7 +35,7 @@ int xiao_app_entry(xiao_env *env) {
 
         if (xiao_mouse_get(env, &mouse) == 0) {
             // Adaptive cursor size: bigger on high-res screens
-            int cursor_size = (sw > 320) ? 12 : 4;
+            int cursor_size = (sw > 320) ? 12 : 8;
             unsigned int cursor_color = (mouse.buttons != 0) ? 0x000000u : 0xFFFFFFu;
             xiao_video_fill_rect_rgb888(
                 env, 

@@ -18,6 +18,7 @@ int xiao_app_entry(xiao_env *env) {
 
     xiao_console_print(env, "clutchpad: started\r\n");
     xiao_exec_line("mode gui");
+    xiao_mouse_reset(env);
 
     while (1) {
         int key;
@@ -33,9 +34,17 @@ int xiao_app_entry(xiao_env *env) {
         );
 
         if (xiao_mouse_get(env, &mouse) == 0) {
-            // Draw a simple 4x4 cursor, black if clicked, white otherwise
+            // Adaptive cursor size: bigger on high-res screens
+            int cursor_size = (sw > 320) ? 12 : 4;
             unsigned int cursor_color = (mouse.buttons != 0) ? 0x000000u : 0xFFFFFFu;
-            xiao_video_fill_rect_rgb888(env, mouse.x - 2, mouse.y - 2, 4, 4, cursor_color);
+            xiao_video_fill_rect_rgb888(
+                env, 
+                mouse.x - cursor_size / 2, 
+                mouse.y - cursor_size / 2, 
+                cursor_size, 
+                cursor_size, 
+                cursor_color
+            );
         }
 
         key = xiao_input_read(env);

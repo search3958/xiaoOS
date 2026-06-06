@@ -74,7 +74,7 @@ if [ -n "$rpi_efi" ]; then
         -device usb-storage,drive=usbdisk \
         -device usb-kbd \
         -device usb-tablet \
-        -serial vc \
+        -serial stdio \
         -monitor none \
         -no-reboot
 fi
@@ -119,6 +119,6 @@ exec qemu-system-aarch64 \
     -drive if=none,id=hd0,file=fat:rw:build/arm64/esp,format=raw \
     -device virtio-blk-device,drive=hd0 \
     -net none \
-    -serial vc \
+    -serial stdio \
     -monitor none \
     -no-reboot

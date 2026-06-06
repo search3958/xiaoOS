@@ -116,13 +116,7 @@ static void bios_console_write(const char *data, xiao_size len) {
     xiao_size i;
     for (i = 0; i < len; i++) {
         console_putc(data[i]);
-        serial_putc(data[i]);
     }
-}
-
-static int bios_input_read(void) {
-    if ((inb(COM1 + 5) & 0x01) == 0) return -1;
-    return (int)inb(COM1);
 }
 
 static int mouse_x = 40;
@@ -131,6 +125,48 @@ static int mouse_btns = 0;
 static int mouse_cycle = 0;
 static u8 mouse_bytes[3];
 static int mouse_init_done = 0;
+
+static int bios_input_read(void) {
+    static unsigned char kbd_us[128] = {
+        0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
+        '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
+        0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0, '\\',
+        'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
+    };
+
+    if ((inb(COM1 + 5) & 0x01) != 0) return (int)inb(COM1);
+
+    if (inb(0x64) & 1) {
+        u8 status = inb(0x64);
+        u8 b = inb(0x60);
+        if (status & 0x20) {
+            // Mouse data - handle it or buffer it
+            // For simplicity, we just process it here if it's mouse data
+            if (mouse_cycle == 0 && !(b & 0x08)) return -1;
+            mouse_bytes[mouse_cycle++] = b;
+            if (mouse_cycle == 3) {
+                mouse_cycle = 0;
+                if (!(mouse_bytes[0] & 0x80 || mouse_bytes[0] & 0x40)) {
+                    int dx = (int)mouse_bytes[1];
+                    int dy = (int)mouse_bytes[2];
+                    if (mouse_bytes[0] & 0x10) dx -= 256;
+                    if (mouse_bytes[0] & 0x20) dy -= 256;
+                    mouse_x += dx; mouse_y -= dy;
+                    if (mouse_x < 0) mouse_x = 0;
+                    if (mouse_y < 0) mouse_y = 0;
+                    if (mouse_x >= VGA_W) mouse_x = VGA_W - 1;
+                    if (mouse_y >= VGA_H) mouse_y = VGA_H - 1;
+                    mouse_btns = mouse_bytes[0] & 0x07;
+                }
+            }
+            return -1;
+        } else {
+            // Keyboard data
+            if (b < 128 && kbd_us[b]) return (int)kbd_us[b];
+        }
+    }
+    return -1;
+}
 
 static void mouse_wait(u8 type) {
     u32 timeout = 100000;

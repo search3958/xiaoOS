@@ -49,6 +49,27 @@ typedef struct {
     void *QueryVariableInfo;
 } XIAO_EFI_RUNTIME_SERVICES;
 
+typedef EFI_STATUS (*EFI_LOCATE_HANDLE_BUFFER)(
+    UINTN SearchType,
+    EFI_GUID *Protocol,
+    void *SearchKey,
+    UINTN *NoHandles,
+    EFI_HANDLE **Buffer
+);
+
+typedef EFI_STATUS (*EFI_OPEN_PROTOCOL)(
+    EFI_HANDLE Handle,
+    EFI_GUID *Protocol,
+    void **Interface,
+    EFI_HANDLE AgentHandle,
+    EFI_HANDLE ControllerHandle,
+    UINT32 Attributes
+);
+
+#define EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL 0x00000001u
+#define EFI_OPEN_PROTOCOL_GET_PROTOCOL 0x00000002u
+#define EFI_LOCATE_HANDLE_BUFFER_BY_PROTOCOL 2
+
 static const EFI_GUID gop_guid = {
     0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}
 };
@@ -69,6 +90,7 @@ static int mouse_btns;
 static int mouse_initialized;
 
 static int uefi_video_size(int *w, int *h);
+static int uefi_locate_pointer_protocol(EFI_GUID *guid, void **out_interface);
 
 typedef struct {
     u16 ScanCode;
@@ -187,6 +209,7 @@ static void uefi_yield(void) {
 
 static int uefi_mouse_get(xiao_mouse_state *out) {
     int sw = 1280, sh = 720;
+    int absolute_ready = 0;
     uefi_video_size(&sw, &sh);
     if (sw <= 0) sw = 1280;
     if (sh <= 0) sh = 720;
@@ -206,8 +229,7 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
      * macOS+QEMU ではマウスグラブ不要でこちらにイベントが来る
      * ---------------------------------------------------------------- */
     if (!abs_pointer_proto && st && st->BootServices && st->BootServices->LocateProtocol) {
-        if (st->BootServices->LocateProtocol(
-                (EFI_GUID *)&abs_pointer_guid, 0, (void **)&abs_pointer_proto) == EFI_SUCCESS) {
+        if (uefi_locate_pointer_protocol((EFI_GUID *)&abs_pointer_guid, (void **)&abs_pointer_proto) == EFI_SUCCESS) {
             if (abs_pointer_proto && abs_pointer_proto->Reset)
                 abs_pointer_proto->Reset(abs_pointer_proto, 0);
             xiao_serial_print(0, "UEFI: AbsolutePointer located\r\n");
@@ -237,9 +259,12 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
             mouse_btns = 0;
             if (state.ActiveButtons & 1) mouse_btns |= 1;
             if (state.ActiveButtons & 2) mouse_btns |= 2;
+            absolute_ready = 1;
         }
-        if (out) { out->x = mouse_x; out->y = mouse_y; out->buttons = mouse_btns; }
-        return 0;
+        if (absolute_ready) {
+            if (out) { out->x = mouse_x; out->y = mouse_y; out->buttons = mouse_btns; }
+            return 0;
+        }
     }
 
     /* ----------------------------------------------------------------
@@ -248,8 +273,7 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
      * ピクセルへ変換するために割り算が必要
      * ---------------------------------------------------------------- */
     if (!pointer_proto && st && st->BootServices && st->BootServices->LocateProtocol) {
-        if (st->BootServices->LocateProtocol(
-                (EFI_GUID *)&pointer_guid, 0, (void **)&pointer_proto) == EFI_SUCCESS) {
+        if (uefi_locate_pointer_protocol((EFI_GUID *)&pointer_guid, (void **)&pointer_proto) == EFI_SUCCESS) {
             if (pointer_proto && pointer_proto->Reset)
                 pointer_proto->Reset(pointer_proto, 0);
             xiao_serial_print(0, "UEFI: SimplePointer located\r\n");
@@ -593,6 +617,39 @@ static int uefi_video_fill_rgb888(unsigned int rgb888) {
     int w, h;
     if (uefi_video_size(&w, &h) != 0) return -1;
     return uefi_video_fill_rect_rgb888(0, 0, w, h, rgb888);
+}
+
+static int uefi_locate_pointer_protocol(EFI_GUID *guid, void **out_interface) {
+    EFI_BOOT_SERVICES *bs;
+    EFI_LOCATE_HANDLE_BUFFER locate_handle_buffer;
+    EFI_OPEN_PROTOCOL open_protocol;
+    EFI_HANDLE *handles = 0;
+    UINTN count = 0;
+    UINTN i;
+
+    if (!out_interface) return -1;
+    *out_interface = 0;
+    if (!st || !st->BootServices || !guid) return -1;
+    bs = st->BootServices;
+
+    if (bs->LocateProtocol && bs->LocateProtocol(guid, 0, out_interface) == EFI_SUCCESS && *out_interface) {
+        return 0;
+    }
+
+    locate_handle_buffer = (EFI_LOCATE_HANDLE_BUFFER)bs->LocateHandleBuffer;
+    open_protocol = (EFI_OPEN_PROTOCOL)bs->OpenProtocol;
+    if (!locate_handle_buffer || !open_protocol) return -1;
+    if (locate_handle_buffer(EFI_LOCATE_HANDLE_BUFFER_BY_PROTOCOL, guid, 0, &count, &handles) != EFI_SUCCESS) return -1;
+    for (i = 0; i < count; i++) {
+        void *iface = 0;
+        if (open_protocol(handles[i], guid, &iface, 0, 0, EFI_OPEN_PROTOCOL_GET_PROTOCOL) == EFI_SUCCESS && iface) {
+            *out_interface = iface;
+            if (bs->FreePool && handles) bs->FreePool(handles);
+            return 0;
+        }
+    }
+    if (bs->FreePool && handles) bs->FreePool(handles);
+    return -1;
 }
 
 static void uefi_mouse_reset(void) {

@@ -4,6 +4,29 @@ set -eu
 cd "$(dirname "$0")"
 make uefi
 
+detect_default_accel() {
+    os="$(uname -s)"
+    arch="$(uname -m)"
+
+    case "$os:$arch" in
+        Darwin:x86_64)
+            printf 'hvf\n'
+            ;;
+        Linux:x86_64)
+            if [ -e /dev/kvm ]; then
+                printf 'kvm\n'
+            else
+                printf 'tcg\n'
+            fi
+            ;;
+        *)
+            printf 'tcg\n'
+            ;;
+    esac
+}
+
+QEMU_ACCEL="${QEMU_ACCEL:-$(detect_default_accel)}"
+
 find_file() {
     for path in "$@"; do
         if [ -n "$path" ] && [ -f "$path" ]; then
@@ -52,9 +75,13 @@ fi
 
 exec qemu-system-x86_64 \
     -machine q35 \
+    -accel "$QEMU_ACCEL" \
     -m 512M \
     -drive if=pflash,format=raw,readonly=on,file="$code" \
     -drive if=ide,file=fat:rw:build/uefi/esp,format=raw \
+    -device qemu-xhci \
+    -device usb-tablet \
+    -device usb-kbd \
     -serial stdio \
     -monitor none \
     -no-reboot

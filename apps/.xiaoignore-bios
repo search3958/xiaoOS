@@ -1,0 +1,8 @@
+# Apps to exclude for BIOS to reduce size
+unx/*
+xuexi.c
+red.c
+clutchpad.c
+hello.c
+serial_hello.c
+clear.c

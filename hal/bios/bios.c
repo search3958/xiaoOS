@@ -127,9 +127,10 @@ static u8 mouse_bytes[3];
 static int mouse_init_done = 0;
 
 static int ctrl_pressed = 0;
+static int super_pressed = 0;
 
 int bios_get_ctrl(void) {
-    return ctrl_pressed;
+    return ctrl_pressed || super_pressed;
 }
 
 static int bios_input_read(void) {
@@ -142,13 +143,10 @@ static int bios_input_read(void) {
 
     if (inb(0x64) & 1) {
         u8 b = inb(0x60);
-        if (b == 0x1d) { // Ctrl press
-            ctrl_pressed = 1;
-            return -1;
-        } else if (b == 0x9d) { // Ctrl release
-            ctrl_pressed = 0;
-            return -1;
-        }
+        if (b == 0x1d) { ctrl_pressed = 1; return -1; }
+        if (b == 0x9d) { ctrl_pressed = 0; return -1; }
+        if (b == 0x5b) { super_pressed = 1; return -1; }
+        if (b == 0xdb) { super_pressed = 0; return -1; }
 
         if (b < 128 && kbd_us[b]) return (int)kbd_us[b];
     }

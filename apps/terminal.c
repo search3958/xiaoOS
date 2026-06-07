@@ -5,9 +5,9 @@
 extern "C" void esp_restart(void);
 #endif
 
-#define TERM_LINE_COUNT 32
-#define TERM_LINE_MAX 200
-#define TERM_INPUT_MAX 127
+#define TERM_LINE_COUNT 16
+#define TERM_LINE_MAX 128
+#define TERM_INPUT_MAX 63
 #define TERM_GLYPH_BITMAP_MAX (128 * 128)
 #define TERM_FONT_PIXELS 24.0f
 #define TERM_MARGIN 12
@@ -17,22 +17,22 @@ extern "C" void esp_restart(void);
 #define TERM_INPUT_COLOR 0xFFCB52u
 #define TERM_CURSOR_COLOR 0xE8EEF6u
 #define TERM_PROMPT_STR "> "
+#ifdef XIAO_BIOS
+#define TTF_ARENA_SIZE (16 * 1024)
+#else
 #define TTF_ARENA_SIZE (128 * 1024)
+#endif
 #define TERM_FP_SHIFT 16
 #define TERM_FP_ONE (1 << TERM_FP_SHIFT)
 
-enum {
-    TERM_ACTION_NONE = 0,
-    TERM_ACTION_MODE_SWITCH = 1,
-    TERM_ACTION_REBOOT = 2,
-    TERM_ACTION_SHUTDOWN = 3
-};
+#define TERM_ACTION_NONE 0
+#define TERM_ACTION_MODE_SWITCH 1
+#define TERM_ACTION_REBOOT 2
+#define TERM_ACTION_SHUTDOWN 3
 
-enum {
-    TERM_ROW_KIND_NONE = 0,
-    TERM_ROW_KIND_HISTORY = 1,
-    TERM_ROW_KIND_INPUT = 2
-};
+#define TERM_ROW_KIND_NONE 0
+#define TERM_ROW_KIND_HISTORY 1
+#define TERM_ROW_KIND_INPUT 2
 
 typedef struct {
     unsigned int fg;
@@ -261,7 +261,7 @@ typedef struct {
     int input_row;
     int prev_input_len;
     char prev_input[TERM_INPUT_MAX + 1];
-    char history[5][TERM_INPUT_MAX + 1];
+    char history[2][32];
     int history_count;
     int history_idx;
     int row_cache_len[TERM_LINE_COUNT];
@@ -791,7 +791,7 @@ static int run_text_terminal(xiao_env *env) {
 
     xiao_console_print(env, "xiao terminal ready\r\n");
     xiao_console_print(env, "type command (example: ls, cat readme.txt), or 'exit'\r\n");
-    char history[5][128] = {0};
+    char history[2][32] = {0};
     int h_idx = 0, h_cnt = 0;
 
     while (1) {
@@ -808,8 +808,9 @@ static int run_text_terminal(xiao_env *env) {
             if (ch == 0x10) { // Ctrl+P / Up
                 if (h_cnt > 0) {
                     while (n > 0) { xiao_console_print(env, "\b \b"); n--; }
-                    h_idx = (h_idx - 1 + h_cnt) % h_cnt;
-                    xiao_size len = xstrlen(history[h_idx]);
+                    h_idx = (h_idx - 1 + h_cnt) % (h_cnt > 2 ? 2 : h_cnt);
+                    xiao_size len = 0;
+                    while(len < 31 && history[h_idx][len]) len++;
                     for(xiao_size i=0; i<len; i++) line[n++] = history[h_idx][i];
                     line[n] = 0;
                     xiao_console_print(env, line);
@@ -838,9 +839,9 @@ static int run_text_terminal(xiao_env *env) {
 
         line[n] = 0;
         if (n > 0) {
-            xiao_size len = xstrlen(line);
-            for(xiao_size i=0; i<len && i<127; i++) history[h_cnt % 5][i] = line[i];
-            history[h_cnt % 5][(len < 127) ? len : 127] = 0;
+            xiao_size len = 0;
+            while(len < n && len < 31) { history[h_cnt % 2][len] = line[len]; len++; }
+            history[h_cnt % 2][len] = 0;
             h_cnt++;
         }
         if (n == 0) continue;

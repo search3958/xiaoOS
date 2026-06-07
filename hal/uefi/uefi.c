@@ -277,11 +277,12 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
         EFI_ABSOLUTE_POINTER_STATE state;
         EFI_STATUS status = abs_pointer_proto->GetState(abs_pointer_proto, &state);
         if (status == EFI_SUCCESS) {
-            xiao_serial_print(0, "UEFI: Absolute Pointer polled success\r\n");
+            char buf[64];
+            // Simple logging to serial
+            xiao_serial_print(0, "UEFI: Absolute Pointer polled\r\n");
             
             EFI_ABSOLUTE_POINTER_MODE *mode = abs_pointer_proto->Mode;
             if (mode) {
-                // ... (座標計算ロジック) ...
                 UINTN range_x = mode->AbsoluteMaxX > mode->AbsoluteMinX ? mode->AbsoluteMaxX - mode->AbsoluteMinX : 1;
                 UINTN range_y = mode->AbsoluteMaxY > mode->AbsoluteMinY ? mode->AbsoluteMaxY - mode->AbsoluteMinY : 1;
                 UINTN cx = state.CurrentX > mode->AbsoluteMinX ? state.CurrentX - mode->AbsoluteMinX : 0;
@@ -290,10 +291,10 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
                 mouse_y = (int)((UINTN)sh * cy / range_y);
             }
             mouse_btns = 0;
-            if (state.ActiveButtons & 1) mouse_btns |= 1;
-            if (state.ActiveButtons & 2) mouse_btns |= 2;
+            if (state.ActiveButtons & 0x01) mouse_btns |= 1; // Left
+            if (state.ActiveButtons & 0x02) mouse_btns |= 2; // Right
+            if (state.ActiveButtons & 0x04) mouse_btns |= 4; // Middle
         } else {
-            char buf[64];
             xiao_serial_print(0, "UEFI: Absolute Pointer polled failed\r\n");
         }
     } else {
@@ -301,10 +302,16 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
             EFI_SIMPLE_POINTER_STATE state;
             EFI_STATUS status = pointer_proto->GetState(pointer_proto, &state);
             if (status == EFI_SUCCESS) {
-                xiao_serial_print(0, "UEFI: Simple Pointer polled success\r\n");
+                xiao_serial_print(0, "UEFI: Simple Pointer polled\r\n");
                 mouse_x += (int)state.RelativeMovementX;
                 mouse_y += (int)state.RelativeMovementY;
-                // ... (範囲制限)
+                
+                // Add boundaries check
+                if (mouse_x < 0) mouse_x = 0;
+                if (mouse_y < 0) mouse_y = 0;
+                if (mouse_x >= sw) mouse_x = sw - 1;
+                if (mouse_y >= sh) mouse_y = sh - 1;
+                
                 mouse_btns = 0;
                 if (state.LeftButton) mouse_btns |= 1;
                 if (state.RightButton) mouse_btns |= 2;
@@ -689,7 +696,7 @@ static void uefi_mouse_move(int dx, int dy) {
 }
 
 static void uefi_mouse_set_buttons(int buttons) {
-    (void)buttons;
+    mouse_btns = buttons;
 }
 
 static int uefi_get_ctrl(void) {

@@ -17,18 +17,20 @@ LLD_LINK_BIN := $(LD_LLD)
 LLD_LINK ?= $(if $(strip $(LD_LLD)),$(LD_LLD) -flavor link,)
 endif
 NASM ?= $(call detect_tool,nasm)
-STAGE2_SECTORS := 128
-STAGE2_SIZE := 65536
+STAGE2_SECTORS := 127
+STAGE2_SIZE := 65024
 
-APP_SRCS := $(shell $(PYTHON) tools/gen_image.py --apps-dir apps --ignore apps/.xiaoignore --list-sources)
+BIOS_APP_SRCS := $(shell $(PYTHON) tools/gen_image.py --apps-dir apps --ignore apps/.xiaoignore-bios --list-sources)
+UEFI_APP_SRCS := $(shell $(PYTHON) tools/gen_image.py --apps-dir apps --ignore apps/.xiaoignore --list-sources)
 FILE_SRCS := $(shell $(PYTHON) tools/gen_image.py --files-dir files --files-ignore files/.xiaoignore --list-files)
 BIOS_FILE_SRCS := $(shell $(PYTHON) tools/gen_image.py --files-dir files --files-ignore files/.xiaoignore-bios --list-files)
-BIOS_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/bios/apps/%.o,$(APP_SRCS))
-UEFI_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/uefi/apps/%.obj,$(APP_SRCS))
-ARM64_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/arm64/apps/%.obj,$(APP_SRCS))
-WRAPPED_APP_SRCS := $(patsubst apps/%.c,$(BUILD)/generated/apps/%.c,$(APP_SRCS))
 
-BIOS_CFLAGS := -m32 -Iinclude -Iapps -ffreestanding -fno-stack-protector -fno-pic -fno-pie -mno-sse -mno-mmx -Os -Wall -Wextra
+BIOS_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/bios/apps/%.o,$(BIOS_APP_SRCS))
+UEFI_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/uefi/apps/%.obj,$(UEFI_APP_SRCS))
+ARM64_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/arm64/apps/%.obj,$(UEFI_APP_SRCS))
+WRAPPED_APP_SRCS := $(patsubst apps/%.c,$(BUILD)/generated/apps/%.c,$(UEFI_APP_SRCS))
+
+BIOS_CFLAGS := -m32 -Iinclude -Iapps -ffreestanding -fno-stack-protector -fno-pic -fno-pie -mno-sse -mno-mmx -Os -Wall -Wextra -ffunction-sections -fdata-sections -DXIAO_BIOS
 UEFI_CFLAGS := -target x86_64-pc-win32 -DXIAO_UEFI_X86_SERIAL -Iinclude -Iapps -Ihal/uefi -ffreestanding -fshort-wchar -fno-stack-protector -mno-red-zone -Os -Wall -Wextra
 ARM64_UEFI_CFLAGS := -target aarch64-unknown-windows -Iinclude -Iapps -Ihal/uefi -ffreestanding -fshort-wchar -fno-stack-protector -Os -Wall -Wextra
 
@@ -89,8 +91,8 @@ $(BUILD)/bios $(BUILD)/uefi $(BUILD)/uefi/esp/EFI/BOOT $(BUILD)/arm64 $(BUILD)/a
 $(BUILD)/generated/image.c: boot/common/boot.txt tools/gen_image.py apps/.xiaoignore files/.xiaoignore $(APP_SRCS) $(FILE_SRCS) FORCE | $(BUILD)/generated
 	$(PYTHON) tools/gen_image.py --boot boot/common/boot.txt --apps-dir apps --ignore apps/.xiaoignore --files-dir files --files-ignore files/.xiaoignore --out $@
 
-$(BUILD)/generated/image_bios.c: boot/common/boot.txt tools/gen_image.py apps/.xiaoignore files/.xiaoignore-bios $(APP_SRCS) $(BIOS_FILE_SRCS) FORCE | $(BUILD)/generated
-	$(PYTHON) tools/gen_image.py --boot boot/common/boot.txt --apps-dir apps --ignore apps/.xiaoignore --files-dir files --files-ignore files/.xiaoignore-bios --out $@
+$(BUILD)/generated/image_bios.c: boot/common/boot.txt tools/gen_image.py apps/.xiaoignore-bios files/.xiaoignore-bios $(APP_SRCS) $(BIOS_FILE_SRCS) FORCE | $(BUILD)/generated
+	$(PYTHON) tools/gen_image.py --boot boot/common/boot.txt --apps-dir apps --ignore apps/.xiaoignore-bios --files-dir files --files-ignore files/.xiaoignore-bios --out $@
 
 $(BUILD)/generated/apps/%.c: apps/%.c tools/wrap_app.py tools/gen_image.py | $(BUILD)/generated
 	mkdir -p $(@D)
@@ -116,10 +118,10 @@ $(BUILD)/bios/bios.o: hal/bios/bios.c include/xiao.h | $(BUILD)/bios
 	$(BIOS_CC) $(BIOS_CFLAGS) -c $< -o $@
 
 $(BUILD)/bios/stage2.elf: $(BUILD)/bios/start32.o $(BUILD)/bios/xiao_core.o $(BIOS_APP_OBJS) $(BUILD)/bios/image.o $(BUILD)/bios/bios.o hal/bios/linker.ld
-	$(BIOS_CC) -m32 -nostdlib -Wl,-m,elf_i386 -Wl,--build-id=none -T hal/bios/linker.ld $(filter %.o,$^) -o $@
+	$(BIOS_CC) -m32 -nostdlib -Wl,-m,elf_i386 -Wl,--build-id=none -Wl,--gc-sections -T hal/bios/linker.ld $(filter %.o,$^) -o $@
 
 $(BUILD)/bios/stage2.raw: $(BUILD)/bios/stage2.elf
-	$(BIOS_OBJCOPY) -O binary $< $@
+	$(BIOS_OBJCOPY) --strip-all -O binary $< $@
 
 $(BUILD)/bios/stage2.bin: $(BUILD)/bios/stage2.raw
 	test $$(wc -c < $<) -le $(STAGE2_SIZE)

@@ -5,3 +5,5 @@ https://components.espressif.com/components/espressif/esp_lcd_gc9a01
 TrueType rasterization for terminal CLI mode uses stb_truetype.h by Sean Barrett
 (public domain / MIT-style dual license):
 https://github.com/nothings/stb/blob/master/stb_truetype.h
+
+Potential USB HID driver/Mouse input handling libraries (TBD)

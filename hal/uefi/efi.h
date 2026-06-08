@@ -34,6 +34,50 @@ typedef struct {
     UINT8 Data4[8];
 } EFI_GUID;
 
+/* EFI_USB_IO_PROTOCOL GUID {2B2F68D8-8096-4861-92F6-96D56E7B4F35} */
+static const EFI_GUID usb_io_guid = {
+    0x2b2f68d8, 0x8096, 0x4861, {0x92, 0xf6, 0x96, 0xd5, 0x6e, 0x7b, 0x4f, 0x35}
+};
+
+struct EFI_USB_IO_PROTOCOL;
+
+typedef EFI_STATUS (EFIAPI *EFI_USB_CONTROL_TRANSFER)(
+    struct EFI_USB_IO_PROTOCOL *This,
+    void *Request,
+    UINTN Direction,
+    UINTN Timeout,
+    void *Data,
+    UINTN DataLength,
+    UINT32 *Status
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_USB_SYNC_INTERRUPT_TRANSFER)(
+    struct EFI_USB_IO_PROTOCOL *This,
+    UINT8 DeviceEndpoint,
+    UINT8 *Data,
+    UINTN *DataLength,
+    UINTN Timeout,
+    UINT32 *Status
+);
+
+typedef struct EFI_USB_IO_PROTOCOL {
+    EFI_USB_CONTROL_TRANSFER UsbControlTransfer;
+    void *UsbBulkTransfer;
+    EFI_USB_SYNC_INTERRUPT_TRANSFER UsbSyncInterruptTransfer;
+    void *UsbAsyncInterruptTransfer;
+    void *UsbIsochronousTransfer;
+    void *UsbAsyncIsochronousTransfer;
+    void *UsbGetDeviceDescriptor;
+    void *UsbGetConfigDescriptor;
+    void *UsbGetInterfaceDescriptor;
+    void *UsbGetEndpointDescriptor;
+    void *UsbGetStringDescriptor;
+    void *UsbGetSupportedLanguageDescriptor;
+    void *UsbDeviceRequestTransfer;
+    void *GetDeviceSpeed;
+    void *PortReset;
+} EFI_USB_IO_PROTOCOL;
+
 struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
 struct SIMPLE_TEXT_OUTPUT_MODE;
 

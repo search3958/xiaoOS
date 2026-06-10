@@ -407,6 +407,11 @@ static void xiao_run_app_args(const xiao_app *app, int argc, const char **argv, 
     const char *saved_app_name = current_env.app_name;
     xiao_ipc_message saved_ipc = current_env.ipc;
     if (!app || !app->main) return;
+
+    xiao_serial_print(&current_env, "KRN: Executing app: ");
+    xiao_serial_print(&current_env, app->name);
+    xiao_serial_print(&current_env, "\r\n");
+
     current_env.app_name = app->name;
     current_env.ipc.from = saved_app_name ? saved_app_name : "kernel";
     current_env.ipc.argc = argc;
@@ -509,9 +514,17 @@ void xiao_start(const xiao_hal *hal, const xiao_boot_image *image) {
     xiao_mode = XIAO_MODE_TEXT;
     console_sink = 0;
     console_sink_ctx = 0;
+    
+    xiao_serial_print(&current_env, "KRN: Initializing FS...\r\n");
     xiao_fs_init(image);
     for (i = 0; i < XIAO_MAX_TASKS; i++) tasks[i].active = 0;
-    if (image) xiao_run_boot_text(image);
+    
+    if (image) {
+        xiao_serial_print(&current_env, "KRN: Running boot text...\r\n");
+        xiao_run_boot_text(image);
+    }
+    
+    xiao_serial_print(&current_env, "KRN: Entering main loop...\r\n");
     while (1) xiao_wait(&current_env, 1000);
 }
 

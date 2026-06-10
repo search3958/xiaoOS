@@ -18,6 +18,8 @@ typedef unsigned char BOOLEAN;
 typedef long long INT64;
 
 #define EFI_SUCCESS 0
+#define EFI_NOT_READY 0x8000000000000006ULL
+#define EFI_NOT_FOUND 0x800000000000000EULL
 
 typedef struct {
     unsigned long long Signature;
@@ -33,6 +35,12 @@ typedef struct {
     UINT16 Data3;
     UINT8 Data4[8];
 } EFI_GUID;
+
+typedef struct {
+    UINT8 Type;
+    UINT8 SubType;
+    UINT8 Length[2];
+} EFI_DEVICE_PATH;
 
 /* EFI_USB_IO_PROTOCOL GUID {2B2F68D8-8096-4861-92F6-96D56E7B4F35} */
 static const EFI_GUID usb_io_guid = {
@@ -141,6 +149,17 @@ typedef EFI_STATUS (EFIAPI *EFI_OPEN_PROTOCOL)(
     UINT32 Attributes
 );
 
+typedef EFI_STATUS (EFIAPI *EFI_CHECK_EVENT)(
+    void *Event
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_CONNECT_CONTROLLER)(
+    EFI_HANDLE ControllerHandle,
+    EFI_HANDLE *DriverImageHandle,
+    EFI_DEVICE_PATH *RemainingDevicePath,
+    BOOLEAN Recursive
+);
+
 typedef struct EFI_BOOT_SERVICES {
     EFI_TABLE_HEADER Hdr;
     void *RaiseTPL;
@@ -155,7 +174,7 @@ typedef struct EFI_BOOT_SERVICES {
     void *WaitForEvent;
     void *SignalEvent;
     void *CloseEvent;
-    void *CheckEvent;
+    EFI_CHECK_EVENT CheckEvent;
     void *InstallProtocolInterface;
     void *ReinstallProtocolInterface;
     void *UninstallProtocolInterface;
@@ -173,7 +192,7 @@ typedef struct EFI_BOOT_SERVICES {
     void *GetNextMonotonicCount;
     void *Stall;
     void *SetWatchdogTimer;
-    void *ConnectController;
+    EFI_CONNECT_CONTROLLER ConnectController;
     void *DisconnectController;
     EFI_OPEN_PROTOCOL OpenProtocol;
     void *CloseProtocol;
@@ -238,17 +257,17 @@ typedef enum {
 } EFI_GRAPHICS_OUTPUT_BLT_OPERATION;
 
 struct EFI_GRAPHICS_OUTPUT_PROTOCOL;
-typedef EFI_STATUS (*EFI_GRAPHICS_OUTPUT_PROTOCOL_QUERY_MODE)(
+typedef EFI_STATUS (EFIAPI *EFI_GRAPHICS_OUTPUT_PROTOCOL_QUERY_MODE)(
     struct EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
     UINT32 ModeNumber,
     UINTN *SizeOfInfo,
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION **Info
 );
-typedef EFI_STATUS (*EFI_GRAPHICS_OUTPUT_PROTOCOL_SET_MODE)(
+typedef EFI_STATUS (EFIAPI *EFI_GRAPHICS_OUTPUT_PROTOCOL_SET_MODE)(
     struct EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
     UINT32 ModeNumber
 );
-typedef EFI_STATUS (*EFI_GRAPHICS_OUTPUT_PROTOCOL_BLT)(
+typedef EFI_STATUS (EFIAPI *EFI_GRAPHICS_OUTPUT_PROTOCOL_BLT)(
     struct EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
     EFI_GRAPHICS_OUTPUT_BLT_PIXEL *BltBuffer,
     EFI_GRAPHICS_OUTPUT_BLT_OPERATION BltOperation,

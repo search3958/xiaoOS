@@ -348,7 +348,43 @@ static void xiao_fs_init(const xiao_boot_image *image) {
     xiao_strcpy_cap(fs_cwd, sizeof(fs_cwd), "/");
     for (i = 0; i < XIAO_FS_MAX_NODES; i++) fs_nodes[i].used = 0;
     xiao_fs_ensure_dir_abs("/");
-    if (!image) return;
+    
+    xiao_serial_print(&current_env, "KRN: FS: Image at ");
+    {
+        char buf[20];
+        unsigned long long addr = (unsigned long long)image;
+        int bi = 0;
+        buf[bi++] = '0'; buf[bi++] = 'x';
+        for (int j = 15; j >= 0; j--) {
+            int v = (addr >> (j * 4)) & 0xf;
+            buf[bi++] = v < 10 ? v + '0' : v - 10 + 'a';
+        }
+        buf[bi] = 0;
+        xiao_serial_print(&current_env, buf);
+    }
+    xiao_serial_print(&current_env, "\r\n");
+
+    if (!image) {
+        xiao_serial_print(&current_env, "KRN: ERR: No boot image!\r\n");
+        return;
+    }
+    
+    xiao_serial_print(&current_env, "KRN: FS: Loading ");
+    {
+        char buf[16];
+        unsigned long n = image->file_count;
+        int bi = 0;
+        if (n == 0) { buf[bi++] = '0'; }
+        else {
+            char tmp[16]; int ti = 0;
+            while (n > 0) { tmp[ti++] = (n % 10) + '0'; n /= 10; }
+            while (ti > 0) { buf[bi++] = tmp[--ti]; }
+        }
+        buf[bi] = 0;
+        xiao_serial_print(&current_env, buf);
+    }
+    xiao_serial_print(&current_env, " files...\r\n");
+
     for (i = 0; i < image->file_count; i++) {
         char path[XIAO_FS_MAX_PATH];
         char parent[XIAO_FS_MAX_PATH];

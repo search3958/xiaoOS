@@ -3,20 +3,16 @@ set -eu
 
 cd "$(dirname "$0")"
 
-mode="${1:-uefi}"
+mode="${1:-grub}"
 case "$mode" in
-    bios|uefi) ;;
+    bios|uefi|grub) ;;
     *)
-        echo "usage: $0 [bios|uefi]" >&2
+        echo "usage: $0 [bios|uefi|grub]" >&2
         exit 1
         ;;
 esac
 
-if [ "$mode" = bios ]; then
-    make bios
-else
-    make uefi
-fi
+make pc
 
 detect_default_accel() {
     os="$(uname -s)"
@@ -61,17 +57,26 @@ find_file() {
 }
 
 if [ "$mode" = bios ]; then
-    exec qemu-system-i386 \
+    exec qemu-system-x86_64 \
         -machine pc \
         -accel "$QEMU_ACCEL" \
         -m 512M \
         -display "$QEMU_DISPLAY" \
         -vga std \
-        -drive file=build/bios/xiao-bios.img,format=raw \
-        -device usb-ehci \
-        -device usb-tablet \
-        -device usb-mouse \
-        -device usb-kbd \
+        -cdrom build/xiaoOS-grub.iso \
+        -serial stdio \
+        -monitor none \
+        -no-reboot
+fi
+
+if [ "$mode" = grub ]; then
+    exec qemu-system-x86_64 \
+        -machine pc \
+        -accel "$QEMU_ACCEL" \
+        -m 512M \
+        -display "$QEMU_DISPLAY" \
+        -vga std \
+        -cdrom build/xiaoOS-grub.iso \
         -serial stdio \
         -monitor none \
         -no-reboot
@@ -119,7 +124,7 @@ exec qemu-system-x86_64 \
     -m 512M \
     -display "$QEMU_DISPLAY" \
     -drive if=pflash,format=raw,readonly=on,file="$code" \
-    -drive if=ide,file=fat:rw:build/uefi/esp,format=raw \
+    -cdrom build/xiaoOS-grub.iso \
     -device qemu-xhci \
     -device usb-mouse \
     -device usb-kbd \

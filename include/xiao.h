@@ -1,8 +1,15 @@
 #ifndef XIAO_H
 #define XIAO_H
 
-typedef unsigned long xiao_size;
-typedef unsigned long xiao_tick;
+#include <stdint.h>
+
+#if defined(__x86_64__) || defined(__aarch64__)
+typedef uint64_t xiao_size;
+typedef uint64_t xiao_tick;
+#else
+typedef uint32_t xiao_size;
+typedef uint32_t xiao_tick;
+#endif
 
 typedef struct xiao_env xiao_env;
 typedef int (*xiao_app_main)(xiao_env *env);

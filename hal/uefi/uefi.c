@@ -4,7 +4,6 @@
 #ifndef NULL
 #define NULL ((void*)0)
 #endif
-#define ByProtocol 2
 
 typedef unsigned char u8;
 typedef unsigned short u16;
@@ -56,9 +55,15 @@ typedef struct {
     void *QueryVariableInfo;
 } XIAO_EFI_RUNTIME_SERVICES;
 
-#define EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL 0x00000001u
-#define EFI_OPEN_PROTOCOL_GET_PROTOCOL 0x00000002u
-#define EFI_LOCATE_HANDLE_BUFFER_BY_PROTOCOL 2
+typedef enum {
+    AllHandles,
+    ByRegisterNotify,
+    ByProtocol
+} EFI_LOCATE_SEARCH_TYPE;
+
+static const EFI_GUID device_path_guid = {
+    0x09576e91, 0x6d3f, 0x11d2, {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}
+};
 
 static const EFI_GUID gop_guid = {
     0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}
@@ -224,17 +229,28 @@ static int last_mouse_x = -1, last_mouse_y = -1;
 static int uefi_video_draw_pixel_rgb888(int x, int y, unsigned int rgb888);
 static void draw_cursor(int x, int y, int draw);
 
+static void uefi_connect_all(void) {
+    EFI_HANDLE *handles = NULL;
+    UINTN count = 0;
+    // 0 = AllHandles
+    EFI_STATUS status = st->BootServices->LocateHandleBuffer(0, NULL, NULL, &count, &handles);
+    if (status == EFI_SUCCESS) {
+        for (UINTN i = 0; i < count; i++) {
+            st->BootServices->ConnectController(handles[i], NULL, NULL, 1);
+        }
+        st->BootServices->FreePool(handles);
+    }
+}
+
 static EFI_STATUS locate_and_open_pointer(EFI_GUID *guid, void **out_proto, EFI_HANDLE image) {
     EFI_HANDLE *handles = NULL;
     UINTN count = 0;
-    EFI_STATUS status = st->BootServices->LocateHandleBuffer(ByProtocol, guid, NULL, &count, &handles);
+    // 2 = ByProtocol
+    EFI_STATUS status = st->BootServices->LocateHandleBuffer(2, guid, NULL, &count, &handles);
     
     if (status == EFI_SUCCESS) {
         for (UINTN i = 0; i < count; i++) {
-            // EDK2 style: try to connect the controller to ensure driver is started
-            st->BootServices->ConnectController(handles[i], NULL, NULL, 1);
-            
-            status = st->BootServices->OpenProtocol(handles[i], guid, out_proto, image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+            status = st->BootServices->OpenProtocol(handles[i], guid, out_proto, image, NULL, 0x00000001u);
             if (status == EFI_SUCCESS) {
                 st->BootServices->FreePool(handles);
                 return EFI_SUCCESS;
@@ -242,7 +258,7 @@ static EFI_STATUS locate_and_open_pointer(EFI_GUID *guid, void **out_proto, EFI_
         }
         st->BootServices->FreePool(handles);
     }
-    return EFI_NOT_FOUND;
+    return 0x800000000000000EULL;
 }
 
 static int uefi_mouse_get(xiao_mouse_state *out) {
@@ -252,70 +268,64 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
     if (sh <= 0) sh = 720;
 
     if (!mouse_initialized) {
-        static const char msg0[] = "UEFI: Initializing pointer protocol...\r\n";
+        static const char msg0[] = "UEFI: Discovering hardware...\r\n";
         uefi_serial_write(msg0, sizeof(msg0) - 1);
         
-        // Try to find both. EDK2 applications often handle multiple protocols.
+        uefi_connect_all();
+
         locate_and_open_pointer((EFI_GUID *)&pointer_guid, (void **)&pointer_proto, g_image);
         locate_and_open_pointer((EFI_GUID *)&abs_pointer_guid, (void **)&abs_pointer_proto, g_image);
 
         if (pointer_proto) {
-            if (pointer_proto->Reset) pointer_proto->Reset(pointer_proto, 0);
-            static const char msg1[] = "UEFI: SimplePointer protocol enabled\r\n";
+            if (pointer_proto->Reset) pointer_proto->Reset(pointer_proto, 1);
+            static const char msg1[] = "UEFI: SimplePointer active\r\n";
             uefi_serial_write(msg1, sizeof(msg1) - 1);
         }
-        
         if (abs_pointer_proto) {
-            if (abs_pointer_proto->Reset) abs_pointer_proto->Reset(abs_pointer_proto, 0);
-            static const char msg2[] = "UEFI: AbsolutePointer protocol enabled\r\n";
+            if (abs_pointer_proto->Reset) abs_pointer_proto->Reset(abs_pointer_proto, 1);
+            static const char msg2[] = "UEFI: AbsolutePointer active\r\n";
             uefi_serial_write(msg2, sizeof(msg2) - 1);
-        }
-        
-        if (!pointer_proto && !abs_pointer_proto) {
-            static const char msgerr[] = "UEFI: ERROR: No pointer protocol found!\r\n";
-            uefi_serial_write(msgerr, sizeof(msgerr) - 1);
         }
         
         mouse_x = sw / 2;
         mouse_y = sh / 2;
         mouse_btns = 0;
         mouse_initialized = 1;
-        last_mouse_x = -1; last_mouse_y = -1; // Force redraw
+        last_mouse_x = -1; last_mouse_y = -1;
     }
 
     int moved = 0;
     if (pointer_proto) {
-        EFI_SIMPLE_POINTER_STATE state;
-        EFI_STATUS status = pointer_proto->GetState(pointer_proto, &state);
-        if (status == EFI_SUCCESS) {
-            mouse_x += (int)state.RelativeMovementX;
-            mouse_y += (int)state.RelativeMovementY;
-            
-            mouse_btns = 0;
-            if (state.LeftButton) mouse_btns |= 1;
-            if (state.RightButton) mouse_btns |= 2;
-            moved = 1;
+        if (pointer_proto->WaitForInput && st->BootServices->CheckEvent(pointer_proto->WaitForInput) == 0) {
+            EFI_SIMPLE_POINTER_STATE state;
+            if (pointer_proto->GetState(pointer_proto, &state) == 0) {
+                int dx = (int)state.RelativeMovementX;
+                int dy = (int)state.RelativeMovementY;
+                if (pointer_proto->Mode && pointer_proto->Mode->ResolutionX > 0) {
+                    dx = (dx * 10) / (int)pointer_proto->Mode->ResolutionX;
+                    dy = (dy * 10) / (int)pointer_proto->Mode->ResolutionY;
+                    if (dx == 0 && state.RelativeMovementX != 0) dx = state.RelativeMovementX > 0 ? 1 : -1;
+                    if (dy == 0 && state.RelativeMovementY != 0) dy = state.RelativeMovementY > 0 ? 1 : -1;
+                }
+                mouse_x += dx; mouse_y += dy;
+                mouse_btns = (state.LeftButton ? 1 : 0) | (state.RightButton ? 2 : 0);
+                moved = 1;
+            }
         }
     } 
     
-    // Check absolute pointer too (some devices report both, or only one)
     if (abs_pointer_proto) {
-        EFI_ABSOLUTE_POINTER_STATE state;
-        EFI_STATUS status = abs_pointer_proto->GetState(abs_pointer_proto, &state);
-        if (status == EFI_SUCCESS) {
-            EFI_ABSOLUTE_POINTER_MODE *mode = abs_pointer_proto->Mode;
-            if (mode) {
-                UINTN range_x = mode->AbsoluteMaxX > mode->AbsoluteMinX ? mode->AbsoluteMaxX - mode->AbsoluteMinX : 1;
-                UINTN range_y = mode->AbsoluteMaxY > mode->AbsoluteMinY ? mode->AbsoluteMaxY - mode->AbsoluteMinY : 1;
-                UINTN cx = state.CurrentX > mode->AbsoluteMinX ? state.CurrentX - mode->AbsoluteMinX : 0;
-                UINTN cy = state.CurrentY > mode->AbsoluteMinY ? state.CurrentY - mode->AbsoluteMinY : 0;
-                mouse_x = (int)((UINTN)sw * cx / range_x);
-                mouse_y = (int)((UINTN)sh * cy / range_y);
+        if (abs_pointer_proto->WaitForInput && st->BootServices->CheckEvent(abs_pointer_proto->WaitForInput) == 0) {
+            EFI_ABSOLUTE_POINTER_STATE state;
+            if (abs_pointer_proto->GetState(abs_pointer_proto, &state) == 0) {
+                EFI_ABSOLUTE_POINTER_MODE *mode = abs_pointer_proto->Mode;
+                if (mode && (mode->AbsoluteMaxX - mode->AbsoluteMinX) > 0) {
+                    mouse_x = (int)((UINTN)sw * (state.CurrentX - mode->AbsoluteMinX) / (mode->AbsoluteMaxX - mode->AbsoluteMinX));
+                    mouse_y = (int)((UINTN)sh * (state.CurrentY - mode->AbsoluteMinY) / (mode->AbsoluteMaxY - mode->AbsoluteMinY));
+                }
+                mouse_btns = (state.ActiveButtons & 0x01 ? 1 : 0) | (state.ActiveButtons & 0x02 ? 2 : 0);
+                moved = 1;
             }
-            mouse_btns = 0;
-            if (state.ActiveButtons & 0x01) mouse_btns |= 1;
-            if (state.ActiveButtons & 0x02) mouse_btns |= 2;
-            moved = 1;
         }
     }
 
@@ -442,11 +452,10 @@ static UINT32 uefi_masked_component(UINT32 v8, UINT32 mask) {
 }
 
 static int uefi_color_from_rgb888(EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info, unsigned int rgb888, UINT32 *out) {
+    UINT32 r = (rgb888 >> 16) & 0xff;
+    UINT32 g = (rgb888 >> 8) & 0xff;
+    UINT32 b = rgb888 & 0xff;
     UINT32 color = 0;
-    u8 r = (u8)((rgb888 >> 16) & 0xff);
-    u8 g = (u8)((rgb888 >> 8) & 0xff);
-    u8 b = (u8)(rgb888 & 0xff);
-    if (!info || !out) return -1;
 
     if (info->PixelFormat == PixelRedGreenBlueReserved8BitPerColor) {
         color = ((UINT32)b << 16) | ((UINT32)g << 8) | (UINT32)r;
@@ -477,31 +486,25 @@ static int uefi_set_mode(int w, int h) {
 }
 
 static void draw_cursor(int x, int y, int draw) {
-    if (uefi_prepare_gop() != 0 || x < 0 || y < 0) return;
+    int sw, sh;
+    if (uefi_video_size(&sw, &sh) != 0) return;
+    if (x < 0 || y < 0 || x >= sw || y >= sh) return;
+
+    int bw = 16, bh = 16;
+    if (x + bw > sw) bw = sw - x;
+    if (y + bh > sh) bh = sh - y;
+    if (bw <= 0 || bh <= 0) return;
+
     int i, j;
     if (draw) {
-        // Save background
-        if (gop->Blt) {
-            gop->Blt(gop, (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)cursor_bg, EfiBltVideoToBltBuffer, (UINTN)x, (UINTN)y, 0, 0, 16, 16, 0);
-        }
-        for (i = 0; i < 16; i++) {
-            for (j = 0; j < 16; j++) {
-                if (cursor_mask[i] & (1 << (7 - (j / 2)))) {
-                    uefi_video_draw_pixel_rgb888(x + j, y + i, 0xFFFFFFFF);
-                }
+        if (gop->Blt) gop->Blt(gop, (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)cursor_bg, 1, (UINTN)x, (UINTN)y, 0, 0, (UINTN)bw, (UINTN)bh, 0);
+        for (i = 0; i < bh; i++) {
+            for (j = 0; j < bw; j++) {
+                if (cursor_mask[i] & (1 << (7 - (j / 2)))) uefi_video_draw_pixel_rgb888(x + j, y + i, 0xFFFFFFFF);
             }
         }
     } else {
-        // Restore background
-        if (gop->Blt) {
-            gop->Blt(gop, (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)cursor_bg, EfiBltBufferToVideo, 0, 0, (UINTN)x, (UINTN)y, 16, 16, 0);
-        } else {
-            for (i = 0; i < 16; i++) {
-                for (j = 0; j < 16; j++) {
-                    uefi_video_draw_pixel_rgb888(x + j, y + i, 0x00000000); 
-                }
-            }
-        }
+        if (gop->Blt) gop->Blt(gop, (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)cursor_bg, 2, 0, 0, (UINTN)x, (UINTN)y, (UINTN)bw, (UINTN)bh, 0);
     }
 }
 
@@ -521,7 +524,7 @@ static int uefi_video_draw_pixel_rgb888(int x, int y, unsigned int rgb888) {
         px.Green = (u8)((rgb888 >> 8) & 0xff);
         px.Blue = (u8)(rgb888 & 0xff);
         px.Reserved = 0;
-        return gop->Blt(gop, &px, EfiBltVideoFill, 0, 0, (UINTN)x, (UINTN)y, 1, 1, 0) == EFI_SUCCESS ? 0 : -1;
+        return gop->Blt(gop, &px, 0, 0, 0, (UINTN)x, (UINTN)y, 1, 1, 0) == 0 ? 0 : -1;
     }
     if (uefi_color_from_rgb888(info, rgb888, &color) != 0) return -1;
     fb = (volatile UINT32 *)(UINTN)mode->FrameBufferBase;
@@ -541,13 +544,6 @@ static int uefi_video_fill_rect_rgb888(int x, int y, int w, int h, unsigned int 
     if (uefi_prepare_gop() != 0) return -1;
     mode = gop->Mode;
     info = mode->Info;
-    x0 = x < 0 ? 0 : x;
-    y0 = y < 0 ? 0 : y;
-    x1 = x + w;
-    y1 = y + h;
-    if (x1 > (int)info->HorizontalResolution) x1 = (int)info->HorizontalResolution;
-    if (y1 > (int)info->VerticalResolution) y1 = (int)info->VerticalResolution;
-    if (x0 >= x1 || y0 >= y1) return -1;
     if (info->PixelFormat == PixelBltOnly) {
         EFI_GRAPHICS_OUTPUT_BLT_PIXEL px;
         if (!gop->Blt) return -1;
@@ -555,110 +551,49 @@ static int uefi_video_fill_rect_rgb888(int x, int y, int w, int h, unsigned int 
         px.Green = (u8)((rgb888 >> 8) & 0xff);
         px.Blue = (u8)(rgb888 & 0xff);
         px.Reserved = 0;
-        return gop->Blt(gop, &px, EfiBltVideoFill, 0, 0, (UINTN)x0, (UINTN)y0, (UINTN)(x1 - x0), (UINTN)(y1 - y0), 0) == EFI_SUCCESS ? 0 : -1;
+        return gop->Blt(gop, &px, 0, 0, 0, (UINTN)x, (UINTN)y, (UINTN)w, (UINTN)h, 0) == 0 ? 0 : -1;
     }
     if (uefi_color_from_rgb888(info, rgb888, &color) != 0) return -1;
     fb = (volatile UINT32 *)(UINTN)mode->FrameBufferBase;
     if (!fb) return -1;
-
+    x0 = x < 0 ? 0 : x;
+    y0 = y < 0 ? 0 : y;
+    x1 = (x + w) > (int)info->HorizontalResolution ? (int)info->HorizontalResolution : (x + w);
+    y1 = (y + h) > (int)info->VerticalResolution ? (int)info->VerticalResolution : (y + h);
     for (yy = y0; yy < y1; yy++) {
-        UINTN row = (UINTN)yy * (UINTN)info->PixelsPerScanLine;
         for (xx = x0; xx < x1; xx++) {
-            fb[row + (UINTN)xx] = color;
+            fb[(UINTN)yy * (UINTN)info->PixelsPerScanLine + (UINTN)xx] = color;
         }
     }
     return 0;
 }
-
-#define UEFI_BLT_ROW_MAX 4096
 
 static int uefi_video_blit_rgb888(int x, int y, int w, int h, const unsigned int *pixels, int stride) {
     EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode;
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
     volatile UINT32 *fb;
     int x0, y0, x1, y1;
-    int sx0, sy0;
-    int rw, rh;
     int yy, xx;
-
-    if (!pixels || w <= 0 || h <= 0 || stride < w) return -1;
+    if (w <= 0 || h <= 0 || !pixels) return -1;
     if (uefi_prepare_gop() != 0) return -1;
-
     mode = gop->Mode;
     info = mode->Info;
-    x0 = x < 0 ? 0 : x;
-    y0 = y < 0 ? 0 : y;
-    x1 = x + w;
-    y1 = y + h;
-    if (x1 > (int)info->HorizontalResolution) x1 = (int)info->HorizontalResolution;
-    if (y1 > (int)info->VerticalResolution) y1 = (int)info->VerticalResolution;
-    if (x0 >= x1 || y0 >= y1) return -1;
-
-    sx0 = x0 - x;
-    sy0 = y0 - y;
-    rw = x1 - x0;
-    rh = y1 - y0;
-
-    if (info->PixelFormat == PixelBltOnly) {
-        static EFI_GRAPHICS_OUTPUT_BLT_PIXEL blt_row[UEFI_BLT_ROW_MAX];
-        if (!gop->Blt || rw > UEFI_BLT_ROW_MAX) return -1;
-
-        for (yy = 0; yy < rh; yy++) {
-            const unsigned int *src = pixels + (sy0 + yy) * stride + sx0;
-            for (xx = 0; xx < rw; xx++) {
-                unsigned int rgb = src[xx];
-                blt_row[xx].Red = (u8)((rgb >> 16) & 0xff);
-                blt_row[xx].Green = (u8)((rgb >> 8) & 0xff);
-                blt_row[xx].Blue = (u8)(rgb & 0xff);
-                blt_row[xx].Reserved = 0;
-            }
-            if (gop->Blt(gop, blt_row, EfiBltBufferToVideo, 0, 0, (UINTN)x0, (UINTN)(y0 + yy), (UINTN)rw, 1, 0) != EFI_SUCCESS) {
-                return -1;
-            }
-        }
-        return 0;
-    }
-
     fb = (volatile UINT32 *)(UINTN)mode->FrameBufferBase;
     if (!fb) return -1;
-
-    if (info->PixelFormat == PixelBlueGreenRedReserved8BitPerColor) {
-        for (yy = 0; yy < rh; yy++) {
-            const unsigned int *src = pixels + (sy0 + yy) * stride + sx0;
-            UINTN row = (UINTN)(y0 + yy) * (UINTN)info->PixelsPerScanLine + (UINTN)x0;
-            for (xx = 0; xx < rw; xx++) {
-                fb[row + (UINTN)xx] = (UINT32)src[xx];
+    x0 = x < 0 ? 0 : x;
+    y0 = y < 0 ? 0 : y;
+    x1 = (x + w) > (int)info->HorizontalResolution ? (int)info->HorizontalResolution : (x + w);
+    y1 = (y + h) > (int)info->VerticalResolution ? (int)info->VerticalResolution : (y + h);
+    for (yy = y0; yy < y1; yy++) {
+        for (xx = x0; xx < x1; xx++) {
+            UINT32 color;
+            unsigned int rgb888 = pixels[(yy - y) * stride + (xx - x)];
+            if (uefi_color_from_rgb888(info, rgb888, &color) == 0) {
+                fb[(UINTN)yy * (UINTN)info->PixelsPerScanLine + (UINTN)xx] = color;
             }
         }
-        return 0;
     }
-
-    if (info->PixelFormat == PixelRedGreenBlueReserved8BitPerColor) {
-        for (yy = 0; yy < rh; yy++) {
-            const unsigned int *src = pixels + (sy0 + yy) * stride + sx0;
-            UINTN row = (UINTN)(y0 + yy) * (UINTN)info->PixelsPerScanLine + (UINTN)x0;
-            for (xx = 0; xx < rw; xx++) {
-                unsigned int rgb = src[xx];
-                fb[row + (UINTN)xx] = (UINT32)(((rgb & 0x000000ffu) << 16) | (rgb & 0x0000ff00u) | ((rgb & 0x00ff0000u) >> 16));
-            }
-        }
-        return 0;
-    }
-
-    if (info->PixelFormat == PixelBitMask) {
-        for (yy = 0; yy < rh; yy++) {
-            const unsigned int *src = pixels + (sy0 + yy) * stride + sx0;
-            UINTN row = (UINTN)(y0 + yy) * (UINTN)info->PixelsPerScanLine + (UINTN)x0;
-            for (xx = 0; xx < rw; xx++) {
-                UINT32 color;
-                if (uefi_color_from_rgb888(info, src[xx], &color) != 0) return -1;
-                fb[row + (UINTN)xx] = color;
-            }
-        }
-        return 0;
-    }
-
-    return -1;
+    return 0;
 }
 
 static int uefi_video_fill_rgb888(unsigned int rgb888) {
@@ -669,7 +604,10 @@ static int uefi_video_fill_rgb888(unsigned int rgb888) {
 
 static void uefi_mouse_reset(void) {
     if (pointer_proto && pointer_proto->Reset) {
-        pointer_proto->Reset(pointer_proto, 0);
+        pointer_proto->Reset(pointer_proto, 1);
+    }
+    if (abs_pointer_proto && abs_pointer_proto->Reset) {
+        abs_pointer_proto->Reset(abs_pointer_proto, 1);
     }
 }
 
@@ -710,7 +648,7 @@ int xiao_uefi_reboot(void) {
     if (!st || !st->RuntimeServices) return -1;
     rt = (XIAO_EFI_RUNTIME_SERVICES *)st->RuntimeServices;
     if (!rt->ResetSystem) return -1;
-    rt->ResetSystem(XIAO_EFI_RESET_WARM, EFI_SUCCESS, 0, 0);
+    rt->ResetSystem(XIAO_EFI_RESET_WARM, 0, 0, 0);
     return 0;
 }
 
@@ -719,7 +657,7 @@ int xiao_uefi_shutdown(void) {
     if (!st || !st->RuntimeServices) return -1;
     rt = (XIAO_EFI_RUNTIME_SERVICES *)st->RuntimeServices;
     if (!rt->ResetSystem) return -1;
-    rt->ResetSystem(XIAO_EFI_RESET_SHUTDOWN, EFI_SUCCESS, 0, 0);
+    rt->ResetSystem(XIAO_EFI_RESET_SHUTDOWN, 0, 0, 0);
     return 0;
 }
 
@@ -728,5 +666,5 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     g_image = image;
     serial_init();
     xiao_start(&uefi_hal, &xiao_image);
-    return EFI_SUCCESS;
+    return 0;
 }

@@ -2,28 +2,40 @@ ENTRY(_start)
 
 SECTIONS
 {
-    . = 1M;
+    /* Load kernel at 4MB to avoid overlap with GRUB boot info and BIOS/UEFI low memory */
+    . = 4M;
 
-    .multiboot_header : {
-        *(.multiboot_header)
+    .multiboot_header : ALIGN(4K) {
+        KEEP(*(.multiboot_header))
     }
 
-    .text : {
-        *(.text)
+    .text : ALIGN(4K) {
+        *(.text .text.*)
     }
 
-    .rodata : {
-        *(.rodata)
+    .rodata : ALIGN(4K) {
+        *(.rodata .rodata.*)
     }
 
-    .data : {
-        *(.data)
+    .data : ALIGN(4K) {
+        *(.data .data.*)
     }
 
-    .bss : {
+    .bss : ALIGN(4K) {
         bss_start = .;
         *(COMMON)
-        *(.bss)
+        *(.bss .bss.*)
         bss_end = .;
+    }
+
+    .stack (NOLOAD) : ALIGN(16) {
+        stack_bottom = .;
+        . += 32K;
+        stack_top = .;
+    }
+
+    /DISCARD/ : {
+        *(.eh_frame)
+        *(.note .note.*)
     }
 }

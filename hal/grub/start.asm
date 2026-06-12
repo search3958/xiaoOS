@@ -24,17 +24,37 @@ multiboot_header_start:
     dd 8                         ; size
 multiboot_header_end:
 
+section .data
+align 16
+mb2_magic_save: dd 0
+mb2_info_save:  dd 0
+
+; Page tables in .data
+align 4096
+p4_table: resb 4096
+p3_table: resb 4096
+p2_table: resb 4096 * 4
+
 section .text
 global _start
 _start:
     cli
+    mov [mb2_magic_save], eax
+    mov [mb2_info_save], ebx
+
+    extern stack_top
     mov esp, stack_top
 
-    ; Save magic and info
-    mov [mb2_magic], eax
-    mov [mb2_info], ebx
+    ; Enable SSE/FPU (Required for x86_64 floats)
+    mov eax, cr0
+    and ax, 0xFFFB      ; Clear EM (bit 2)
+    or ax, 0x0002       ; Set MP (bit 1)
+    mov cr0, eax
+    mov eax, cr4
+    or ax, 3 << 9       ; Set OSFXSR (bit 9) and OSXMMEXCPT (bit 10)
+    mov cr4, eax
 
-    ; Zero out .bss (Crucial for Multiboot2)
+    ; Zero out .bss
     extern bss_start
     extern bss_end
     mov edi, bss_start
@@ -44,31 +64,18 @@ _start:
     shr ecx, 2
     rep stosd
 
-    ; Check for long mode
-    mov eax, 0x80000000
-    cpuid
-    cmp eax, 0x80000001
-    jb no_long_mode
-    mov eax, 0x80000001
-    cpuid
-    test edx, 1 << 29
-    jz no_long_mode
-
-    ; Setup paging
-    ; Clear page tables
+    ; Setup paging (Identity map 4GB)
     mov edi, p4_table
     xor eax, eax
-    mov ecx, 4096 * (1 + 1 + 4) / 4
+    mov ecx, 4096 * 6 / 4
     rep stosd
 
-    ; P4[0] -> P3
     mov eax, p3_table
     or eax, 0x03 ; Present | RW
     mov [p4_table], eax
 
-    ; P3[0..3] -> P2 tables (Identity map 4GB)
     mov eax, p2_table
-    or eax, 0x03
+    or eax, 0x03 ; Present | RW
     mov [p3_table], eax
     add eax, 4096
     mov [p3_table + 8], eax
@@ -77,14 +84,13 @@ _start:
     add eax, 4096
     mov [p3_table + 24], eax
 
-    ; Fill P2 tables with 2MB pages
     mov ecx, 0
     mov eax, 0x83 ; Present | RW | Huge
 .map_p2:
     mov [p2_table + ecx * 8], eax
     add eax, 0x200000
     inc ecx
-    cmp ecx, 2048 ; 2048 * 2MB = 4GB
+    cmp ecx, 2048 ; 4GB
     jne .map_p2
 
     ; Enable PAE
@@ -92,23 +98,20 @@ _start:
     or eax, 1 << 5
     mov cr4, eax
 
-    ; Enable long mode in EFER
+    ; Enable long mode
     mov ecx, 0xC0000080
     rdmsr
-    or eax, 1 << 8
+    or eax, 1 << 8 ; LME
     wrmsr
 
     ; Enable paging
     mov eax, p4_table
     mov cr3, eax
     mov eax, cr0
-    or eax, 1 << 31
+    or eax, 1 << 31 ; PG
     mov cr0, eax
 
-    ; Load GDT
     lgdt [gdt64_ptr]
-
-    ; Jump to 64-bit code
     jmp 0x08:long_mode_start
 
 bits 64
@@ -120,9 +123,11 @@ long_mode_start:
     mov gs, ax
     mov ss, ax
 
-    ; Arguments for grub_main(magic, addr)
-    mov edi, [rel mb2_magic]
-    mov esi, [rel mb2_info]
+    and rsp, -16
+    sub rsp, 8
+
+    mov edi, [rel mb2_magic_save]
+    mov esi, [rel mb2_info_save]
 
     extern grub_main
     call grub_main
@@ -141,29 +146,10 @@ section .rodata
 align 8
 gdt64:
     dq 0 ; null
-    dq (1 << 43) | (1 << 44) | (1 << 47) | (1 << 53) ; code (64-bit, exec/read)
-    dq (1 << 44) | (1 << 47) | (1 << 41)             ; data (64-bit, read/write)
+    dq (1 << 43) | (1 << 44) | (1 << 47) | (1 << 53) ; code
+    dq (1 << 44) | (1 << 47) | (1 << 41)             ; data
 gdt64_end:
 
 gdt64_ptr:
     dw gdt64_end - gdt64 - 1
     dq gdt64
-
-section .bss
-align 4096
-p4_table:
-    resb 4096
-p3_table:
-    resb 4096
-p2_table:
-    resb 4096 * 4 ; 4 tables for 4GB
-
-align 16
-stack_bottom:
-    resb 16384
-stack_top:
-
-mb2_magic:
-    resd 1
-mb2_info:
-    resd 1

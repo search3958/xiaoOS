@@ -36,7 +36,7 @@ WRAPPED_APP_SRCS := $(patsubst apps/%.c,$(BUILD)/generated/apps/%.c,$(UEFI_APP_S
 BIOS_CFLAGS := -m32 -Iinclude -Iapps -ffreestanding -fno-stack-protector -fno-pic -fno-pie -mno-sse -mno-mmx -Os -Wall -Wextra -ffunction-sections -fdata-sections -DXIAO_BIOS
 UEFI_CFLAGS := -target x86_64-pc-win32 -DXIAO_UEFI_X86_SERIAL -Iinclude -Iapps -Ihal/uefi -ffreestanding -fshort-wchar -fno-stack-protector -mno-red-zone -Os -Wall -Wextra
 LIMINE_CFLAGS := -target x86_64-elf -Iinclude -Iapps -Ihal/limine -ffreestanding -fno-stack-protector -mno-red-zone -mcmodel=kernel -Os -Wall -Wextra -DXIAO_LIMINE
-GRUB_CFLAGS := -target x86_64-elf -Iinclude -Iapps -Ihal/grub -ffreestanding -fno-stack-protector -mno-red-zone -mno-sse -mno-mmx -mno-80387 -Os -Wall -Wextra -DXIAO_GRUB
+GRUB_CFLAGS := -target x86_64-elf -Iinclude -Iapps -Ihal/grub -ffreestanding -fno-stack-protector -mno-red-zone -Os -Wall -Wextra -DXIAO_GRUB
 ARM64_UEFI_CFLAGS := -target aarch64-unknown-windows -Iinclude -Iapps -Ihal/uefi -ffreestanding -fshort-wchar -fno-stack-protector -Os -Wall -Wextra
 
 .SECONDARY: $(WRAPPED_APP_SRCS)

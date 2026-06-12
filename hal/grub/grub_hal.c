@@ -38,13 +38,23 @@ static void serial_init(void) {
 }
 
 static void serial_putc(char c) {
-    while ((inb(COM1 + 5) & 0x20) == 0) {}
     outb(COM1, (u8)c);
 }
 
 static void grub_serial_write(const char *data, xiao_size len) {
     xiao_size i;
     for (i = 0; i < len; i++) serial_putc(data[i]);
+}
+
+static void grub_serial_print_hex(u64 val) {
+    char buf[19];
+    buf[0] = '0'; buf[1] = 'x';
+    for (int i = 0; i < 16; i++) {
+        int v = (val >> ((15 - i) * 4)) & 0xf;
+        buf[i + 2] = v < 10 ? v + '0' : v - 10 + 'a';
+    }
+    buf[18] = 0;
+    grub_serial_write(buf, 18);
 }
 
 static void grub_console_write(const char *data, xiao_size len) {
@@ -265,6 +275,11 @@ static const xiao_hal grub_hal = {
 void grub_main(u32 magic, u32 addr) {
     serial_init();
     grub_serial_write("GRUB: xiaoOS loading...\n", 25);
+    grub_serial_write("GRUB: magic=", 12);
+    grub_serial_print_hex(magic);
+    grub_serial_write(" addr=", 7);
+    grub_serial_print_hex(addr);
+    grub_serial_write("\n", 1);
 
     if (magic != MULTIBOOT2_BOOTLOADER_MAGIC) {
         grub_serial_write("GRUB: ERR: Invalid Multiboot2 magic\n", 36);
@@ -272,17 +287,30 @@ void grub_main(u32 magic, u32 addr) {
     }
 
     struct multiboot_tag *tag;
+    u32 total_size = *(u32 *)(uintptr_t)addr;
+    grub_serial_write("GRUB: info_size=", 16);
+    grub_serial_print_hex(total_size);
+    grub_serial_write("\n", 1);
+
     for (tag = (struct multiboot_tag *)(uintptr_t)(addr + 8);
-         tag->type != MULTIBOOT_TAG_TYPE_END;
+         (u8 *)tag < (u8 *)(uintptr_t)addr + total_size;
          tag = (struct multiboot_tag *)((u8 *)tag + ((tag->size + 7) & ~7))) {
+        
+        if (tag->type == MULTIBOOT_TAG_TYPE_END) break;
+
         if (tag->type == MULTIBOOT_TAG_TYPE_FRAMEBUFFER) {
             fb_tag = (struct multiboot_tag_framebuffer *)tag;
+            grub_serial_write("GRUB: Found Framebuffer tag\n", 28);
         }
     }
 
     if (!fb_tag) {
         grub_serial_write("GRUB: WRN: Framebuffer not found\n", 33);
     }
+
+    grub_serial_write("GRUB: image_addr=", 17);
+    grub_serial_print_hex((uintptr_t)&xiao_image);
+    grub_serial_write("\n", 1);
 
     grub_serial_write("GRUB: xiao_start calling...\n", 28);
     xiao_start(&grub_hal, &xiao_image);

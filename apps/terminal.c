@@ -917,8 +917,8 @@ static int run_cli_terminal(xiao_env *env) {
 
     cli_init_layers(st);
     cli_clear_history(st);
-    cli_feed_output(st, "BaramOS Terminal ready\n", xstrlen("BaramOS Terminal ready\n"));
-    cli_feed_output(st, "Hello, world!\n", xstrlen("Hello, world!\n"));
+    cli_feed_output(st, "xiaoOS Terminal ready\n", xstrlen("xiaoOS Terminal ready\n"));
+    cli_feed_output(st, "Type 'help' for commands.\n", xstrlen("Type 'help' for commands.\n"));
 
     xiao_console_set_sink(cli_sink, st);
     cli_render_dirty(st);

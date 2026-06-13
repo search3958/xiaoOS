@@ -227,21 +227,61 @@ static void draw_cursor(int x, int y, int draw);
 static EFI_STATUS locate_and_open_pointer(EFI_GUID *guid, void **out_proto, EFI_HANDLE image) {
     EFI_HANDLE *handles = NULL;
     UINTN count = 0;
-    EFI_STATUS status = st->BootServices->LocateHandleBuffer(ByProtocol, guid, NULL, &count, &handles);
+    EFI_STATUS status;
     
-    if (status == EFI_SUCCESS) {
+    /* First try LocateProtocol (simpler, works on most systems) */
+    status = st->BootServices->LocateProtocol(guid, NULL, out_proto);
+    if (status == EFI_SUCCESS && *out_proto != NULL) {
+        static const char msg[] = "UEFI: LocateProtocol succeeded\r\n";
+        uefi_serial_write(msg, sizeof(msg) - 1);
+        return EFI_SUCCESS;
+    }
+    
+    /* Fallback to LocateHandleBuffer + OpenProtocol */
+    status = st->BootServices->LocateHandleBuffer(ByProtocol, guid, NULL, &count, &handles);
+    
+    if (status == EFI_SUCCESS && handles != NULL && count > 0) {
+        static const char msg_found[] = "UEFI: Found handle(s), trying OpenProtocol...\r\n";
+        uefi_serial_write(msg_found, sizeof(msg_found) - 1);
+        
         for (UINTN i = 0; i < count; i++) {
-            // EDK2 style: try to connect the controller to ensure driver is started
-            st->BootServices->ConnectController(handles[i], NULL, NULL, 1);
+            /* First connect controller to ensure driver is bound */
+            status = st->BootServices->ConnectController(handles[i], NULL, NULL, TRUE);
+            if (status != EFI_SUCCESS && status != EFI_UNSUPPORTED) {
+                /* Continue anyway - some drivers don't need ConnectController */
+            }
             
-            status = st->BootServices->OpenProtocol(handles[i], guid, out_proto, image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-            if (status == EFI_SUCCESS) {
+            /* Try OpenProtocol with GET_PROTOCOL attribute */
+            status = st->BootServices->OpenProtocol(
+                handles[i], 
+                guid, 
+                out_proto, 
+                image, 
+                NULL, 
+                EFI_OPEN_PROTOCOL_GET_PROTOCOL
+            );
+            if (status == EFI_SUCCESS && *out_proto != NULL) {
+                static const char msg_ok[] = "UEFI: OpenProtocol succeeded\r\n";
+                uefi_serial_write(msg_ok, sizeof(msg_ok) - 1);
+                st->BootServices->FreePool(handles);
+                return EFI_SUCCESS;
+            }
+            
+            /* Also try HandleProtocol as fallback */
+            status = st->BootServices->HandleProtocol(handles[i], guid, out_proto);
+            if (status == EFI_SUCCESS && *out_proto != NULL) {
+                static const char msg_hp[] = "UEFI: HandleProtocol succeeded\r\n";
+                uefi_serial_write(msg_hp, sizeof(msg_hp) - 1);
                 st->BootServices->FreePool(handles);
                 return EFI_SUCCESS;
             }
         }
         st->BootServices->FreePool(handles);
+    } else {
+        static const char msg_nohandle[] = "UEFI: No handles found for protocol\r\n";
+        uefi_serial_write(msg_nohandle, sizeof(msg_nohandle) - 1);
     }
+    
     return EFI_NOT_FOUND;
 }
 

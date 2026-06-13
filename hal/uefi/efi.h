@@ -20,6 +20,14 @@ typedef long long INT64;
 #define EFI_SUCCESS 0
 #define EFI_NOT_READY 0x8000000000000006ULL
 #define EFI_NOT_FOUND 0x800000000000000EULL
+#define EFI_UNSUPPORTED 0x8000000000000003ULL
+
+#ifndef TRUE
+#define TRUE 1
+#endif
+#ifndef FALSE
+#define FALSE 0
+#endif
 
 typedef struct {
     unsigned long long Signature;
@@ -178,7 +186,7 @@ typedef struct EFI_BOOT_SERVICES {
     void *InstallProtocolInterface;
     void *ReinstallProtocolInterface;
     void *UninstallProtocolInterface;
-    void *HandleProtocol;
+    EFI_OPEN_PROTOCOL HandleProtocol;
     void *Reserved;
     void *RegisterProtocolNotify;
     void *LocateHandle;

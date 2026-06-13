@@ -17,7 +17,6 @@ LLD_LINK_BIN := $(LD_LLD)
 LLD_LINK ?= $(if $(strip $(LD_LLD)),$(LD_LLD) -flavor link,)
 endif
 NASM ?= $(call detect_tool,nasm)
-GRUB_MKRESCUE ?= $(call detect_tool,i686-elf-grub-mkrescue grub-mkrescue)
 STAGE2_SECTORS := 127
 STAGE2_SIZE := 65024
 
@@ -28,60 +27,28 @@ BIOS_FILE_SRCS := $(shell $(PYTHON) tools/gen_image.py --files-dir files --files
 
 BIOS_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/bios/apps/%.o,$(BIOS_APP_SRCS))
 UEFI_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/uefi/apps/%.obj,$(UEFI_APP_SRCS))
-LIMINE_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/limine/apps/%.o,$(UEFI_APP_SRCS))
-GRUB_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/grub/apps/%.o,$(UEFI_APP_SRCS))
 ARM64_APP_OBJS := $(patsubst apps/%.c,$(BUILD)/arm64/apps/%.obj,$(UEFI_APP_SRCS))
 WRAPPED_APP_SRCS := $(patsubst apps/%.c,$(BUILD)/generated/apps/%.c,$(UEFI_APP_SRCS))
 
 BIOS_CFLAGS := -m32 -Iinclude -Iapps -ffreestanding -fno-stack-protector -fno-pic -fno-pie -mno-sse -mno-mmx -Os -Wall -Wextra -ffunction-sections -fdata-sections -DXIAO_BIOS
 UEFI_CFLAGS := -target x86_64-pc-win32 -DXIAO_UEFI_X86_SERIAL -Iinclude -Iapps -Ihal/uefi -ffreestanding -fshort-wchar -fno-stack-protector -mno-red-zone -Os -Wall -Wextra
-LIMINE_CFLAGS := -target x86_64-elf -Iinclude -Iapps -Ihal/limine -ffreestanding -fno-stack-protector -mno-red-zone -mcmodel=kernel -Os -Wall -Wextra -DXIAO_LIMINE
-GRUB_CFLAGS := -target x86_64-elf -Iinclude -Iapps -Ihal/grub -ffreestanding -fno-stack-protector -mno-red-zone -Os -Wall -Wextra -DXIAO_GRUB
 ARM64_UEFI_CFLAGS := -target aarch64-unknown-windows -Iinclude -Iapps -Ihal/uefi -ffreestanding -fshort-wchar -fno-stack-protector -Os -Wall -Wextra
 
 .SECONDARY: $(WRAPPED_APP_SRCS)
 
-.PHONY: all pc bios uefi limine grub arm64 arduino esp32c3 esp32c3-upload esp32c3-monitor sync-sketches check clean FORCE toolchain-check-bios toolchain-check-uefi toolchain-check-limine toolchain-check-grub
+.PHONY: all pc bios uefi arm64 arduino esp32c3 esp32c3-upload esp32c3-monitor sync-sketches check clean FORCE toolchain-check-bios toolchain-check-uefi
 
 all: pc
 
-pc: grub
+pc: bios uefi
 
 check: pc arm64
-
-limine: toolchain-check-limine $(BUILD)/xiaoOS.iso
-
-grub: toolchain-check-grub $(BUILD)/xiaoOS-grub.iso
 
 bios: toolchain-check-bios $(BUILD)/bios/xiao-bios.img
 
 uefi: toolchain-check-uefi $(BUILD)/uefi/BOOTX64.EFI $(BUILD)/uefi/esp/EFI/BOOT/BOOTX64.EFI
 
 arm64: toolchain-check-uefi $(BUILD)/arm64/BOOTAA64.EFI $(BUILD)/arm64/esp/EFI/BOOT/BOOTAA64.EFI
-
-toolchain-check-limine:
-	@[ -n "$(strip $(CLANG))" ] || { \
-		echo "Missing required tool: clang" >&2; \
-		exit 127; \
-	}
-	@[ -d "limine-bin-git" ] || { \
-		echo "Limine binaries not found. Please run 'git clone https://github.com/limine-bootloader/limine.git --branch=v8.4.0-binary --depth=1 limine-bin-git'" >&2; \
-		exit 1; \
-	}
-
-toolchain-check-grub:
-	@[ -n "$(strip $(CLANG))" ] || { \
-		echo "Missing required tool: clang" >&2; \
-		exit 127; \
-	}
-	@[ -n "$(strip $(GRUB_MKRESCUE))" ] || { \
-		echo "Missing required tool: grub-mkrescue (or i686-elf-grub-mkrescue)" >&2; \
-		exit 127; \
-	}
-	@[ -n "$(strip $(NASM))" ] || { \
-		echo "Missing required tool: nasm" >&2; \
-		exit 127; \
-	}
 
 toolchain-check-bios:
 	@[ -n "$(strip $(NASM))" ] || { \
@@ -204,72 +171,6 @@ $(BUILD)/arm64/BOOTAA64.EFI: $(BUILD)/arm64/xiao_core.obj $(ARM64_APP_OBJS) $(BU
 
 $(BUILD)/arm64/esp/EFI/BOOT/BOOTAA64.EFI: $(BUILD)/arm64/BOOTAA64.EFI | $(BUILD)/arm64/esp/EFI/BOOT
 	cp $< $@
-
-# Limine Rules
-$(BUILD)/limine/xiao_core.o: kernel/core/xiao_core.c include/xiao.h | $(BUILD)/limine
-	$(CLANG) $(LIMINE_CFLAGS) -c $< -o $@
-
-$(BUILD)/limine/apps/%.o: $(BUILD)/generated/apps/%.c include/xiao.h | $(BUILD)/limine
-	mkdir -p $(@D)
-	$(CLANG) $(LIMINE_CFLAGS) -c $< -o $@
-
-$(BUILD)/limine/image.o: $(BUILD)/generated/image.c include/xiao.h | $(BUILD)/limine
-	$(CLANG) $(LIMINE_CFLAGS) -c $< -o $@
-
-$(BUILD)/limine/limine_hal.o: hal/limine/limine_hal.c hal/limine/limine.h include/xiao.h | $(BUILD)/limine
-	$(CLANG) $(LIMINE_CFLAGS) -c $< -o $@
-
-$(BUILD)/limine/xiao-kernel.elf: $(BUILD)/limine/xiao_core.o $(LIMINE_APP_OBJS) $(BUILD)/limine/image.o $(BUILD)/limine/limine_hal.o hal/limine/linker.ld
-	$(LD_LLD) -T hal/limine/linker.ld $(filter %.o,$^) -o $@
-
-limine-bin-git/limine-tool: limine-bin-git/limine.c
-	$(CC) -O2 $< -o $@
-
-$(BUILD)/xiaoOS.iso: $(BUILD)/limine/xiao-kernel.elf limine.conf limine-bin-git/limine-tool | $(BUILD)/limine
-	rm -rf $(BUILD)/iso_root
-	mkdir -p $(BUILD)/iso_root
-	cp $(BUILD)/limine/xiao-kernel.elf limine.conf \
-	   limine-bin-git/limine-bios.sys limine-bin-git/limine-bios-cd.bin limine-bin-git/limine-uefi-cd.bin \
-	   $(BUILD)/iso_root/
-	mkdir -p $(BUILD)/iso_root/EFI/BOOT
-	cp limine-bin-git/BOOTX64.EFI $(BUILD)/iso_root/EFI/BOOT/
-	cp limine-bin-git/BOOTAA64.EFI $(BUILD)/iso_root/EFI/BOOT/
-	xorriso -as mkisofs -b limine-bios-cd.bin \
-		-no-emul-boot -boot-load-size 4 -boot-info-table \
-		--efi-boot limine-uefi-cd.bin \
-		-efi-boot-part --efi-boot-image --protective-msdos-label \
-		$(BUILD)/iso_root -o $@
-	./limine-bin-git/limine-tool bios-install $@
-
-# GRUB Rules
-$(BUILD)/grub/xiao_core.o: kernel/core/xiao_core.c include/xiao.h | $(BUILD)/grub
-	$(CLANG) $(GRUB_CFLAGS) -c $< -o $@
-
-$(BUILD)/grub/apps/%.o: $(BUILD)/generated/apps/%.c include/xiao.h | $(BUILD)/grub
-	mkdir -p $(@D)
-	$(CLANG) $(GRUB_CFLAGS) -c $< -o $@
-
-$(BUILD)/grub/image.o: $(BUILD)/generated/image.c include/xiao.h | $(BUILD)/grub
-	$(CLANG) $(GRUB_CFLAGS) -c $< -o $@
-
-$(BUILD)/grub/grub_hal.o: hal/grub/grub_hal.c hal/grub/multiboot2.h include/xiao.h | $(BUILD)/grub
-	$(CLANG) $(GRUB_CFLAGS) -c $< -o $@
-
-$(BUILD)/grub/start.o: hal/grub/start.asm | $(BUILD)/grub
-	$(NASM) -f elf64 $< -o $@
-
-$(BUILD)/grub/xiao-kernel.elf: $(BUILD)/grub/start.o $(BUILD)/grub/xiao_core.o $(GRUB_APP_OBJS) $(BUILD)/grub/image.o $(BUILD)/grub/grub_hal.o hal/grub/linker.ld
-	$(LD_LLD) -T hal/grub/linker.ld $(filter %.o,$^) -o $@
-
-$(BUILD)/xiaoOS-grub.iso: $(BUILD)/grub/xiao-kernel.elf hal/grub/grub.cfg
-	rm -rf $(BUILD)/grub_root
-	mkdir -p $(BUILD)/grub_root/boot/grub
-	cp $(BUILD)/grub/xiao-kernel.elf $(BUILD)/grub_root/boot/
-	cp hal/grub/grub.cfg $(BUILD)/grub_root/boot/grub/
-	$(GRUB_MKRESCUE) -o $@ $(BUILD)/grub_root
-
-$(BUILD)/limine $(BUILD)/grub:
-	mkdir -p $@
 
 sync-sketches:
 	$(PYTHON) tools/sync_sketch.py hal/arduino/xiaoOS

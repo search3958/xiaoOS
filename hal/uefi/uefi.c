@@ -256,53 +256,61 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
         uefi_serial_write(msg0, sizeof(msg0) - 1);
         
         // Try to find both. EDK2 applications often handle multiple protocols.
-        locate_and_open_pointer((EFI_GUID *)&pointer_guid, (void **)&pointer_proto, g_image);
-        locate_and_open_pointer((EFI_GUID *)&abs_pointer_guid, (void **)&abs_pointer_proto, g_image);
+        EFI_STATUS s1 = locate_and_open_pointer((EFI_GUID *)&pointer_guid, (void **)&pointer_proto, g_image);
+        EFI_STATUS s2 = locate_and_open_pointer((EFI_GUID *)&abs_pointer_guid, (void **)&abs_pointer_proto, g_image);
 
         if (pointer_proto) {
             if (pointer_proto->Reset) pointer_proto->Reset(pointer_proto, 0);
             static const char msg1[] = "UEFI: SimplePointer protocol enabled\r\n";
             uefi_serial_write(msg1, sizeof(msg1) - 1);
+        } else {
+            static const char msgerr1[] = "UEFI: SimplePointer NOT found\r\n";
+            uefi_serial_write(msgerr1, sizeof(msgerr1) - 1);
         }
         
         if (abs_pointer_proto) {
             if (abs_pointer_proto->Reset) abs_pointer_proto->Reset(abs_pointer_proto, 0);
             static const char msg2[] = "UEFI: AbsolutePointer protocol enabled\r\n";
             uefi_serial_write(msg2, sizeof(msg2) - 1);
-        }
-        
-        if (!pointer_proto && !abs_pointer_proto) {
-            static const char msgerr[] = "UEFI: ERROR: No pointer protocol found!\r\n";
-            uefi_serial_write(msgerr, sizeof(msgerr) - 1);
+        } else {
+            static const char msgerr2[] = "UEFI: AbsolutePointer NOT found\r\n";
+            uefi_serial_write(msgerr2, sizeof(msgerr2) - 1);
         }
         
         mouse_x = sw / 2;
         mouse_y = sh / 2;
         mouse_btns = 0;
         mouse_initialized = 1;
-        last_mouse_x = -1; last_mouse_y = -1; // Force redraw
+        last_mouse_x = -1; last_mouse_y = -1;
     }
 
     int moved = 0;
+    int current_btns = 0;
+
+    // Polling Relative Pointer
     if (pointer_proto) {
         EFI_SIMPLE_POINTER_STATE state;
         EFI_STATUS status = pointer_proto->GetState(pointer_proto, &state);
         if (status == EFI_SUCCESS) {
+            if (state.RelativeMovementX != 0 || state.RelativeMovementY != 0) {
+                static const char msg[] = "UEFI: RelPtr moved\r\n";
+                uefi_serial_write(msg, sizeof(msg) - 1);
+            }
             mouse_x += (int)state.RelativeMovementX;
             mouse_y += (int)state.RelativeMovementY;
             
-            mouse_btns = 0;
-            if (state.LeftButton) mouse_btns |= 1;
-            if (state.RightButton) mouse_btns |= 2;
+            if (state.LeftButton) current_btns |= 1;
+            if (state.RightButton) current_btns |= 2;
             moved = 1;
         }
     } 
     
-    // Check absolute pointer too (some devices report both, or only one)
+    // Polling Absolute Pointer
     if (abs_pointer_proto) {
         EFI_ABSOLUTE_POINTER_STATE state;
         EFI_STATUS status = abs_pointer_proto->GetState(abs_pointer_proto, &state);
         if (status == EFI_SUCCESS) {
+            moved = 1; // Mark moved if status is success to force update
             EFI_ABSOLUTE_POINTER_MODE *mode = abs_pointer_proto->Mode;
             if (mode) {
                 UINTN range_x = mode->AbsoluteMaxX > mode->AbsoluteMinX ? mode->AbsoluteMaxX - mode->AbsoluteMinX : 1;
@@ -312,18 +320,20 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
                 mouse_x = (int)((UINTN)sw * cx / range_x);
                 mouse_y = (int)((UINTN)sh * cy / range_y);
             }
-            mouse_btns = 0;
-            if (state.ActiveButtons & 0x01) mouse_btns |= 1;
-            if (state.ActiveButtons & 0x02) mouse_btns |= 2;
-            moved = 1;
+            if (state.ActiveButtons & 0x01) current_btns |= 1;
+            if (state.ActiveButtons & 0x02) current_btns |= 2;
         }
     }
 
+    mouse_btns = current_btns;
+
+    // Bounds checking
     if (mouse_x < 0) mouse_x = 0;
     if (mouse_y < 0) mouse_y = 0;
     if (mouse_x >= sw) mouse_x = sw - 1;
     if (mouse_y >= sh) mouse_y = sh - 1;
 
+    // Redraw cursor
     if (moved || (last_mouse_x == -1)) {
         draw_cursor(last_mouse_x, last_mouse_y, 0); 
         draw_cursor(mouse_x, mouse_y, 1);           

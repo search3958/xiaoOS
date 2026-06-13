@@ -32,21 +32,35 @@ WRAPPED_APP_SRCS := $(patsubst apps/%.c,$(BUILD)/generated/apps/%.c,$(UEFI_APP_S
 
 BIOS_CFLAGS := -m32 -Iinclude -Iapps -ffreestanding -fno-stack-protector -fno-pic -fno-pie -mno-sse -mno-mmx -Os -Wall -Wextra -ffunction-sections -fdata-sections -DXIAO_BIOS
 UEFI_CFLAGS := -target x86_64-pc-win32 -DXIAO_UEFI_X86_SERIAL -Iinclude -Iapps -Ihal/uefi -ffreestanding -fshort-wchar -fno-stack-protector -mno-red-zone -Os -Wall -Wextra
-ARM64_UEFI_CFLAGS := -target aarch64-unknown-windows -Iinclude -Iapps -Ihal/uefi -ffreestanding -fshort-wchar -fno-stack-protector -Os -Wall -Wextra
+GRUB_CFLAGS := -m32 -Iinclude -Iapps -Ihal/grub -ffreestanding -fno-stack-protector -fno-pic -fno-pie -mno-sse -mno-mmx -Os -Wall -Wextra -ffunction-sections -fdata-sections -DXIAO_GRUB
 
 .SECONDARY: $(WRAPPED_APP_SRCS)
 
-.PHONY: all pc bios uefi arm64 arduino esp32c3 esp32c3-upload esp32c3-monitor sync-sketches check clean FORCE toolchain-check-bios toolchain-check-uefi
+.PHONY: all grub arm64 arduino esp32c3 esp32c3-upload esp32c3-monitor sync-sketches check clean FORCE toolchain-check-bios toolchain-check-uefi
 
-all: pc
+all: grub
 
-pc: bios uefi
+check: grub arm64
 
-check: pc arm64
+grub: toolchain-check-bios $(BUILD)/grub/xiaoos.bin
 
-bios: toolchain-check-bios $(BUILD)/bios/xiao-bios.img
+$(BUILD)/grub/start.o: hal/grub/start.asm | $(BUILD)/grub
+	$(NASM) -f elf32 $< -o $@
 
-uefi: toolchain-check-uefi $(BUILD)/uefi/BOOTX64.EFI $(BUILD)/uefi/esp/EFI/BOOT/BOOTX64.EFI
+$(BUILD)/grub/grub_hal.o: hal/grub/grub_hal.c include/xiao.h | $(BUILD)/grub
+	$(BIOS_CC) $(GRUB_CFLAGS) -c $< -o $@
+
+$(BUILD)/grub/ps2.o: hal/grub/ps2.c include/xiao.h | $(BUILD)/grub
+	$(BIOS_CC) $(GRUB_CFLAGS) -c $< -o $@
+
+$(BUILD)/grub/linker.ld: hal/bios/linker.ld | $(BUILD)/grub
+	cp $< $@
+
+$(BUILD)/grub/xiaoos.bin: $(BUILD)/grub/start.o $(BUILD)/grub/grub_hal.o $(BUILD)/grub/ps2.o $(BUILD)/bios/xiao_core.o $(BIOS_APP_OBJS) $(BUILD)/bios/image.o | $(BUILD)/grub/linker.ld
+	$(BIOS_CC) -m32 -nostdlib -Wl,-m,elf_i386 -Wl,--build-id=none -Wl,--gc-sections -T $(BUILD)/grub/linker.ld $^ -o $@
+
+$(BUILD)/grub/ps2.o: hal/grub/ps2.c include/xiao.h | $(BUILD)/grub
+	$(BIOS_CC) $(GRUB_CFLAGS) -c $< -o $@
 
 arm64: toolchain-check-uefi $(BUILD)/arm64/BOOTAA64.EFI $(BUILD)/arm64/esp/EFI/BOOT/BOOTAA64.EFI
 
@@ -85,7 +99,7 @@ toolchain-check-uefi:
 		exit 127; \
 	}
 
-$(BUILD)/bios $(BUILD)/uefi $(BUILD)/uefi/esp/EFI/BOOT $(BUILD)/arm64 $(BUILD)/arm64/esp/EFI/BOOT $(BUILD)/generated:
+$(BUILD)/bios $(BUILD)/uefi $(BUILD)/uefi/esp/EFI/BOOT $(BUILD)/arm64 $(BUILD)/arm64/esp/EFI/BOOT $(BUILD)/grub $(BUILD)/generated:
 	mkdir -p $@
 
 $(BUILD)/generated/image.c: boot/common/boot.txt tools/gen_image.py apps/.xiaoignore files/.xiaoignore $(APP_SRCS) $(FILE_SRCS) FORCE | $(BUILD)/generated

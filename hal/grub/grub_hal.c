@@ -1,4 +1,11 @@
+#include "xiao.h"
 #include "multiboot2.h"
+
+// Extern PS/2 driver functions
+extern int grub_input_read(void);
+extern int grub_get_ctrl(void);
+extern int grub_mouse_get(xiao_mouse_state *out);
+extern void grub_mouse_init(void);
 
 // Basic GRUB HAL implementation stub
 // Kernel will be loaded by GRUB, we need to handle PS/2 keyboard/mouse directly in the kernel
@@ -9,11 +16,6 @@ static void grub_serial_write(const char *data, xiao_size len) {
 
 static void grub_console_write(const char *data, xiao_size len) {
     // To be implemented
-}
-
-static int grub_input_read(void) {
-    // To be implemented: PS/2 Keyboard driver
-    return -1;
 }
 
 static void grub_wait_ms(xiao_tick ms) {
@@ -44,11 +46,6 @@ static int grub_video_set_mode(int w, int h) {
     return -1;
 }
 
-static int grub_mouse_get(xiao_mouse_state *out) {
-    // To be implemented: PS/2 Mouse driver
-    return -1;
-}
-
 static void grub_mouse_reset(void) {
 }
 
@@ -56,10 +53,6 @@ static void grub_mouse_move(int dx, int dy) {
 }
 
 static void grub_mouse_set_buttons(int buttons) {
-}
-
-static int grub_get_ctrl(void) {
-    return 0;
 }
 
 static const xiao_hal grub_hal = {
@@ -83,6 +76,6 @@ static const xiao_hal grub_hal = {
 };
 
 void grub_main(void) {
-    // Initialize things and call xiao_start
+    grub_mouse_init();
     xiao_start(&grub_hal, &xiao_image);
 }

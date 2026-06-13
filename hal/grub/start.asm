@@ -1,26 +1,11 @@
 ; Multiboot2 header
-section .text
+section .multiboot_header
 align 8
 header_start:
     dd 0xE85250D6                ; magic
     dd 0                         ; architecture 0 (i386)
     dd header_end - header_start ; header length
     dd 0x100000000 - (0xE85250D6 + 0 + (header_end - header_start)) ; checksum
-    
-    ; Address tag
-    dw 2
-    dw 0
-    dd 24
-    dd header_start
-    dd _start32
-    dd 0
-    dd 0
-    
-    ; Entry point tag
-    dw 3
-    dw 0
-    dd 12
-    dd _start32
     
     ; End tag
     dw 0
@@ -29,6 +14,7 @@ header_start:
 header_end:
 
 [BITS 32]
+section .text
 global _start32
 extern grub_main
 

@@ -4,6 +4,7 @@
 #ifndef NULL
 #define NULL ((void*)0)
 #endif
+#define EFI_NOT_FOUND 0x800000000000000Eu
 #define ByProtocol 2
 
 typedef unsigned char u8;
@@ -81,6 +82,7 @@ static int mouse_initialized;
 
 static int uefi_video_size(int *w, int *h);
 static int uefi_set_mode(int w, int h);
+static int uefi_locate_pointer_protocol(EFI_GUID *guid, void **out_interface);
 
 typedef struct {
     u16 ScanCode;
@@ -162,51 +164,39 @@ static void serial_init(void) {
 #endif
 }
 
-static void serial_putc(char c) {
 #ifdef XIAO_UEFI_X86_SERIAL
-    unsigned long timeout = 1000000;
-    while ((uefi_inb(COM1 + 5) & 0x20) == 0 && timeout--) {}
-    if (timeout > 0) uefi_outb(COM1, (u8)c);
-#endif
+static void serial_putc(char c) {
+    while ((uefi_inb(COM1 + 5) & 0x20) == 0) {}
+    uefi_outb(COM1, (u8)c);
 }
+#endif
 
 static void uefi_serial_write(const char *data, xiao_size len) {
+#ifdef XIAO_UEFI_X86_SERIAL
     xiao_size i;
     for (i = 0; i < len; i++) serial_putc(data[i]);
     uefi_console_write(data, len);
+#else
+    uefi_console_write(data, len);
+#endif
 }
-
-static int uefi_mouse_get(xiao_mouse_state *out);
 
 static int uefi_input_read(void) {
     XIAO_EFI_INPUT_KEY key;
     XIAO_EFI_SIMPLE_TEXT_INPUT_PROTOCOL *in;
-    
-    // Periodically poll mouse so cursor moves during input waits
-    uefi_mouse_get(NULL);
-    
     if (!st || !st->ConIn) return -1;
     in = (XIAO_EFI_SIMPLE_TEXT_INPUT_PROTOCOL *)st->ConIn;
     if (!in->ReadKeyStroke) return -1;
-    
-    EFI_STATUS status = in->ReadKeyStroke(in, &key);
-    if (status == EFI_SUCCESS) {
-        if (key.UnicodeChar != 0) return (int)key.UnicodeChar;
-        if (key.ScanCode == 0x17) return '\n';
-        if (key.ScanCode == 0x01) return 0x10; // Ctrl+P / Up (approx)
-    }
+    if (in->ReadKeyStroke(in, &key) != EFI_SUCCESS) return -1;
+    if (key.UnicodeChar != 0) return (int)key.UnicodeChar;
+    if (key.ScanCode == 0x17) return '\n';
     return -1;
 }
 
 static void uefi_wait_ms(xiao_tick ms) {
-    if (st && st->BootServices && st->BootServices->Stall) {
-        typedef EFI_STATUS (EFIAPI *EFI_STALL)(UINTN Microseconds);
-        ((EFI_STALL)st->BootServices->Stall)((UINTN)ms * 1000);
-    } else {
-        volatile unsigned long i;
-        while (ms--) {
-            for (i = 0; i < 120000; i++) {}
-        }
+    volatile unsigned long i;
+    while (ms--) {
+        for (i = 0; i < 120000; i++) {}
     }
 }
 
@@ -227,61 +217,18 @@ static void draw_cursor(int x, int y, int draw);
 static EFI_STATUS locate_and_open_pointer(EFI_GUID *guid, void **out_proto, EFI_HANDLE image) {
     EFI_HANDLE *handles = NULL;
     UINTN count = 0;
-    EFI_STATUS status;
+    EFI_STATUS status = st->BootServices->LocateHandleBuffer(ByProtocol, guid, NULL, &count, &handles);
     
-    /* First try LocateProtocol (simpler, works on most systems) */
-    status = st->BootServices->LocateProtocol(guid, NULL, out_proto);
-    if (status == EFI_SUCCESS && *out_proto != NULL) {
-        static const char msg[] = "UEFI: LocateProtocol succeeded\r\n";
-        uefi_serial_write(msg, sizeof(msg) - 1);
-        return EFI_SUCCESS;
-    }
-    
-    /* Fallback to LocateHandleBuffer + OpenProtocol */
-    status = st->BootServices->LocateHandleBuffer(ByProtocol, guid, NULL, &count, &handles);
-    
-    if (status == EFI_SUCCESS && handles != NULL && count > 0) {
-        static const char msg_found[] = "UEFI: Found handle(s), trying OpenProtocol...\r\n";
-        uefi_serial_write(msg_found, sizeof(msg_found) - 1);
-        
+    if (status == EFI_SUCCESS) {
         for (UINTN i = 0; i < count; i++) {
-            /* First connect controller to ensure driver is bound */
-            status = st->BootServices->ConnectController(handles[i], NULL, NULL, TRUE);
-            if (status != EFI_SUCCESS && status != EFI_UNSUPPORTED) {
-                /* Continue anyway - some drivers don't need ConnectController */
-            }
-            
-            /* Try OpenProtocol with GET_PROTOCOL attribute */
-            status = st->BootServices->OpenProtocol(
-                handles[i], 
-                guid, 
-                out_proto, 
-                image, 
-                NULL, 
-                EFI_OPEN_PROTOCOL_GET_PROTOCOL
-            );
-            if (status == EFI_SUCCESS && *out_proto != NULL) {
-                static const char msg_ok[] = "UEFI: OpenProtocol succeeded\r\n";
-                uefi_serial_write(msg_ok, sizeof(msg_ok) - 1);
-                st->BootServices->FreePool(handles);
-                return EFI_SUCCESS;
-            }
-            
-            /* Also try HandleProtocol as fallback */
-            status = st->BootServices->HandleProtocol(handles[i], guid, out_proto);
-            if (status == EFI_SUCCESS && *out_proto != NULL) {
-                static const char msg_hp[] = "UEFI: HandleProtocol succeeded\r\n";
-                uefi_serial_write(msg_hp, sizeof(msg_hp) - 1);
+            status = st->BootServices->OpenProtocol(handles[i], guid, out_proto, image, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+            if (status == EFI_SUCCESS) {
                 st->BootServices->FreePool(handles);
                 return EFI_SUCCESS;
             }
         }
         st->BootServices->FreePool(handles);
-    } else {
-        static const char msg_nohandle[] = "UEFI: No handles found for protocol\r\n";
-        uefi_serial_write(msg_nohandle, sizeof(msg_nohandle) - 1);
     }
-    
     return EFI_NOT_FOUND;
 }
 
@@ -292,65 +239,47 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
     if (sh <= 0) sh = 720;
 
     if (!mouse_initialized) {
-        static const char msg0[] = "UEFI: Initializing pointer protocol...\r\n";
-        uefi_serial_write(msg0, sizeof(msg0) - 1);
-        
-        // Try to find both. EDK2 applications often handle multiple protocols.
-        EFI_STATUS s1 = locate_and_open_pointer((EFI_GUID *)&pointer_guid, (void **)&pointer_proto, g_image);
-        EFI_STATUS s2 = locate_and_open_pointer((EFI_GUID *)&abs_pointer_guid, (void **)&abs_pointer_proto, g_image);
-
-        if (pointer_proto) {
+        xiao_serial_print(0, "UEFI: Initializing pointer protocol...\r\n");
+        // Prioritize SimplePointer for button reliability
+        if (locate_and_open_pointer((EFI_GUID *)&pointer_guid, (void **)&pointer_proto, g_image) == EFI_SUCCESS) {
             if (pointer_proto->Reset) pointer_proto->Reset(pointer_proto, 0);
-            static const char msg1[] = "UEFI: SimplePointer protocol enabled\r\n";
-            uefi_serial_write(msg1, sizeof(msg1) - 1);
-        } else {
-            static const char msgerr1[] = "UEFI: SimplePointer NOT found\r\n";
-            uefi_serial_write(msgerr1, sizeof(msgerr1) - 1);
-        }
-        
-        if (abs_pointer_proto) {
+            xiao_serial_print(0, "UEFI: SimplePointer protocol enabled\r\n");
+        } else if (locate_and_open_pointer((EFI_GUID *)&abs_pointer_guid, (void **)&abs_pointer_proto, g_image) == EFI_SUCCESS) {
             if (abs_pointer_proto->Reset) abs_pointer_proto->Reset(abs_pointer_proto, 0);
-            static const char msg2[] = "UEFI: AbsolutePointer protocol enabled\r\n";
-            uefi_serial_write(msg2, sizeof(msg2) - 1);
+            xiao_serial_print(0, "UEFI: AbsolutePointer protocol enabled\r\n");
         } else {
-            static const char msgerr2[] = "UEFI: AbsolutePointer NOT found\r\n";
-            uefi_serial_write(msgerr2, sizeof(msgerr2) - 1);
+            xiao_serial_print(0, "UEFI: CRITICAL: No pointer protocol found!\r\n");
         }
         
         mouse_x = sw / 2;
         mouse_y = sh / 2;
         mouse_btns = 0;
         mouse_initialized = 1;
-        last_mouse_x = -1; last_mouse_y = -1;
+        draw_cursor(mouse_x, mouse_y, 1);
+        last_mouse_x = mouse_x;
+        last_mouse_y = mouse_y;
     }
 
-    int moved = 0;
-    int current_btns = 0;
-
-    // Polling Relative Pointer
     if (pointer_proto) {
         EFI_SIMPLE_POINTER_STATE state;
         EFI_STATUS status = pointer_proto->GetState(pointer_proto, &state);
         if (status == EFI_SUCCESS) {
-            if (state.RelativeMovementX != 0 || state.RelativeMovementY != 0) {
-                static const char msg[] = "UEFI: RelPtr moved\r\n";
-                uefi_serial_write(msg, sizeof(msg) - 1);
-            }
             mouse_x += (int)state.RelativeMovementX;
             mouse_y += (int)state.RelativeMovementY;
             
-            if (state.LeftButton) current_btns |= 1;
-            if (state.RightButton) current_btns |= 2;
-            moved = 1;
+            if (mouse_x < 0) mouse_x = 0;
+            if (mouse_y < 0) mouse_y = 0;
+            if (mouse_x >= sw) mouse_x = sw - 1;
+            if (mouse_y >= sh) mouse_y = sh - 1;
+            
+            mouse_btns = 0;
+            if (state.LeftButton) mouse_btns |= 1;
+            if (state.RightButton) mouse_btns |= 2;
         }
-    } 
-    
-    // Polling Absolute Pointer
-    if (abs_pointer_proto) {
+    } else if (abs_pointer_proto) {
         EFI_ABSOLUTE_POINTER_STATE state;
         EFI_STATUS status = abs_pointer_proto->GetState(abs_pointer_proto, &state);
         if (status == EFI_SUCCESS) {
-            moved = 1; // Mark moved if status is success to force update
             EFI_ABSOLUTE_POINTER_MODE *mode = abs_pointer_proto->Mode;
             if (mode) {
                 UINTN range_x = mode->AbsoluteMaxX > mode->AbsoluteMinX ? mode->AbsoluteMaxX - mode->AbsoluteMinX : 1;
@@ -360,21 +289,13 @@ static int uefi_mouse_get(xiao_mouse_state *out) {
                 mouse_x = (int)((UINTN)sw * cx / range_x);
                 mouse_y = (int)((UINTN)sh * cy / range_y);
             }
-            if (state.ActiveButtons & 0x01) current_btns |= 1;
-            if (state.ActiveButtons & 0x02) current_btns |= 2;
+            mouse_btns = 0;
+            if (state.ActiveButtons & 0x01) mouse_btns |= 1;
+            if (state.ActiveButtons & 0x02) mouse_btns |= 2;
         }
     }
 
-    mouse_btns = current_btns;
-
-    // Bounds checking
-    if (mouse_x < 0) mouse_x = 0;
-    if (mouse_y < 0) mouse_y = 0;
-    if (mouse_x >= sw) mouse_x = sw - 1;
-    if (mouse_y >= sh) mouse_y = sh - 1;
-
-    // Redraw cursor
-    if (moved || (last_mouse_x == -1)) {
+    if (mouse_x != last_mouse_x || mouse_y != last_mouse_y) {
         draw_cursor(last_mouse_x, last_mouse_y, 0); 
         draw_cursor(mouse_x, mouse_y, 1);           
         last_mouse_x = mouse_x;
@@ -527,29 +448,15 @@ static int uefi_set_mode(int w, int h) {
 }
 
 static void draw_cursor(int x, int y, int draw) {
-    if (uefi_prepare_gop() != 0 || x < 0 || y < 0) return;
     int i, j;
-    if (draw) {
-        // Save background
-        if (gop->Blt) {
-            gop->Blt(gop, (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)cursor_bg, EfiBltVideoToBltBuffer, (UINTN)x, (UINTN)y, 0, 0, 16, 16, 0);
-        }
-        for (i = 0; i < 16; i++) {
-            for (j = 0; j < 16; j++) {
+    for (i = 0; i < 16; i++) {
+        for (j = 0; j < 16; j++) {
+            if (draw) {
                 if (cursor_mask[i] & (1 << (7 - (j / 2)))) {
                     uefi_video_draw_pixel_rgb888(x + j, y + i, 0xFFFFFFFF);
                 }
-            }
-        }
-    } else {
-        // Restore background
-        if (gop->Blt) {
-            gop->Blt(gop, (EFI_GRAPHICS_OUTPUT_BLT_PIXEL *)cursor_bg, EfiBltBufferToVideo, 0, 0, (UINTN)x, (UINTN)y, 16, 16, 0);
-        } else {
-            for (i = 0; i < 16; i++) {
-                for (j = 0; j < 16; j++) {
-                    uefi_video_draw_pixel_rgb888(x + j, y + i, 0x00000000); 
-                }
+            } else {
+                uefi_video_draw_pixel_rgb888(x + j, y + i, 0x00000000); 
             }
         }
     }
@@ -715,6 +622,39 @@ static int uefi_video_fill_rgb888(unsigned int rgb888) {
     int w, h;
     if (uefi_video_size(&w, &h) != 0) return -1;
     return uefi_video_fill_rect_rgb888(0, 0, w, h, rgb888);
+}
+
+static int uefi_locate_pointer_protocol(EFI_GUID *guid, void **out_interface) {
+    EFI_BOOT_SERVICES *bs;
+    EFI_LOCATE_HANDLE_BUFFER locate_handle_buffer;
+    EFI_OPEN_PROTOCOL open_protocol;
+    EFI_HANDLE *handles = 0;
+    UINTN count = 0;
+    UINTN i;
+
+    if (!out_interface) return -1;
+    *out_interface = 0;
+    if (!st || !st->BootServices || !guid) return -1;
+    bs = st->BootServices;
+
+    if (bs->LocateProtocol && bs->LocateProtocol(guid, 0, out_interface) == EFI_SUCCESS && *out_interface) {
+        return 0;
+    }
+
+    locate_handle_buffer = bs->LocateHandleBuffer;
+    open_protocol = bs->OpenProtocol;
+    if (!locate_handle_buffer || !open_protocol) return -1;
+    if (locate_handle_buffer(EFI_LOCATE_HANDLE_BUFFER_BY_PROTOCOL, guid, 0, &count, &handles) != EFI_SUCCESS) return -1;
+    for (i = 0; i < count; i++) {
+        void *iface = 0;
+        if (open_protocol(handles[i], guid, &iface, 0, 0, EFI_OPEN_PROTOCOL_GET_PROTOCOL) == EFI_SUCCESS && iface) {
+            *out_interface = iface;
+            if (bs->FreePool && handles) bs->FreePool(handles);
+            return 0;
+        }
+    }
+    if (bs->FreePool && handles) bs->FreePool(handles);
+    return -1;
 }
 
 static void uefi_mouse_reset(void) {

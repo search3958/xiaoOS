@@ -124,6 +124,10 @@ typedef EFI_STATUS (EFIAPI *EFI_FREE_POOL)(
     void *Buffer
 );
 
+typedef EFI_STATUS (EFIAPI *EFI_STALL)(
+    UINTN Microseconds
+);
+
 typedef EFI_STATUS (EFIAPI *EFI_LOCATE_HANDLE_BUFFER)(
     UINTN SearchType,
     EFI_GUID *Protocol,
@@ -139,6 +143,19 @@ typedef EFI_STATUS (EFIAPI *EFI_OPEN_PROTOCOL)(
     EFI_HANDLE AgentHandle,
     EFI_HANDLE ControllerHandle,
     UINT32 Attributes
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_HANDLE_PROTOCOL)(
+    EFI_HANDLE Handle,
+    EFI_GUID *Protocol,
+    void **Interface
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_CONNECT_CONTROLLER)(
+    EFI_HANDLE ControllerHandle,
+    EFI_HANDLE *DriverImageHandle,
+    void *RemainingDevicePath,
+    BOOLEAN Recursive
 );
 
 typedef struct EFI_BOOT_SERVICES {
@@ -159,7 +176,7 @@ typedef struct EFI_BOOT_SERVICES {
     void *InstallProtocolInterface;
     void *ReinstallProtocolInterface;
     void *UninstallProtocolInterface;
-    void *HandleProtocol;
+    EFI_HANDLE_PROTOCOL HandleProtocol;
     void *Reserved;
     void *RegisterProtocolNotify;
     void *LocateHandle;
@@ -171,9 +188,9 @@ typedef struct EFI_BOOT_SERVICES {
     void *UnloadImage;
     void *ExitBootServices;
     void *GetNextMonotonicCount;
-    void *Stall;
+    EFI_STALL Stall;
     void *SetWatchdogTimer;
-    void *ConnectController;
+    EFI_CONNECT_CONTROLLER ConnectController;
     void *DisconnectController;
     EFI_OPEN_PROTOCOL OpenProtocol;
     void *CloseProtocol;

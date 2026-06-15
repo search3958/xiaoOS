@@ -121,6 +121,7 @@ exec qemu-system-x86_64 \
     -drive if=pflash,format=raw,readonly=on,file="$code" \
     -drive if=ide,file=fat:rw:build/uefi/esp,format=raw \
     -device qemu-xhci \
+    -device usb-tablet \
     -device usb-mouse \
     -device usb-kbd \
     -serial stdio \

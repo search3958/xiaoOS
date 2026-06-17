@@ -61,9 +61,18 @@ typedef struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL {
 } EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
 
 typedef struct {
+    uint32_t Version;
+    uint32_t HorizontalResolution;
+    uint32_t VerticalResolution;
+    uint32_t PixelFormat;
+    uint32_t PixelInformation[4];
+    uint32_t PixelsPerScanLine;
+} EFI_GRAPHICS_OUTPUT_MODE_INFORMATION;
+
+typedef struct {
     uint32_t MaxMode;
     uint32_t Mode;
-    void *Info;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *Info;
     uint64_t SizeOfInfo;
     uint64_t FrameBufferBase;
     uint64_t FrameBufferSize;
@@ -154,7 +163,32 @@ typedef struct _EFI_SYSTEM_TABLE {
     void *ConfigurationTable;
 } EFI_SYSTEM_TABLE;
 
+typedef struct {
+    uint64_t CurrentX;
+    uint64_t CurrentY;
+    uint64_t CurrentZ;
+    uint32_t ActiveButtons;
+} EFI_ABSOLUTE_POINTER_STATE;
+
+typedef struct {
+    uint64_t AbsoluteMinX;
+    uint64_t AbsoluteMinY;
+    uint64_t AbsoluteMinZ;
+    uint64_t AbsoluteMaxX;
+    uint64_t AbsoluteMaxY;
+    uint64_t AbsoluteMaxZ;
+    uint32_t Attributes;
+} EFI_ABSOLUTE_POINTER_MODE;
+
+typedef struct _EFI_ABSOLUTE_POINTER_PROTOCOL {
+    EFI_STATUS (*Reset)(struct _EFI_ABSOLUTE_POINTER_PROTOCOL *This, uint8_t ExtendedVerification);
+    EFI_STATUS (*GetState)(struct _EFI_ABSOLUTE_POINTER_PROTOCOL *This, EFI_ABSOLUTE_POINTER_STATE *State);
+    void *WaitForInput;
+    EFI_ABSOLUTE_POINTER_MODE *Mode;
+} EFI_ABSOLUTE_POINTER_PROTOCOL;
+
 #define EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID {0x9042a9de, 0x23dc, 0x4a38, {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}}
 #define EFI_SIMPLE_POINTER_PROTOCOL_GUID {0x31878c87, 0x0b75, 0x11d5, {0x9a, 0x4f, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d}}
+#define EFI_ABSOLUTE_POINTER_PROTOCOL_GUID {0x8e7afda0, 0x4a57, 0x11d4, {0x9a, 0x4d, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d}}
 
 #endif

@@ -3,39 +3,60 @@ set -eu
 
 cd "$(dirname "$0")"
 
-mode="${1:-bios}"
-case "$mode" in
-    bios|uefi) ;;
-    *)
-        echo "usage: $0 [bios|uefi]" >&2
-        exit 1
-        ;;
+usage() {
+    cat <<'EOF'
+Usage: $0 [image|qemu]
+
+Commands:
+  image   Generate a bootable SD card image for Raspberry Pi 4 (default)
+  qemu    Run in QEMU raspi3b emulator (for testing)
+
+Environment variables:
+  RPI_UBOOT_DIR      Path to U-Boot binary for RPi 4 (REQUIRED for image)
+                     Must contain: u-boot.bin (UEFI-capable build)
+                     Build: make rpi_4_defconfig && make
+                     Or download from: https://ftp.denx.de/pub/u-boot/
+  RPI_FIRMWARE_DIR   Path to standard RPi firmware (start4.elf, fixup4.dat, etc.)
+                     Download from: https://github.com/raspberrypi/firmware/tree/master/boot
+  IMAGE_SIZE_MB      Image size in megabytes (default: 128)
+  QEMU_ACCEL         QEMU acceleration (hvf/kvm/tcg)
+  QEMU_DISPLAY       QEMU display backend (cocoa/gtk/default)
+
+Boot process: bootcode4.bin -> start4.elf -> U-Boot -> UEFI -> BOOTAA64.EFI
+EOF
+    exit 1
+}
+
+cmd="${1:-image}"
+case "$cmd" in
+    image) ;;
+    qemu) ;;
+    -h|--help|help) usage ;;
+    *) echo "Unknown command: $cmd" >&2; usage ;;
 esac
 
-if [ "$mode" = bios ]; then
-    make arm64
-else
-    make arm64
-fi
+# ── build arm64 UEFI application ──────────────────────────────────────────────
+make arm64
+
+# ── shared helpers ────────────────────────────────────────────────────────────
+find_file() {
+    for path in "$@"; do
+        if [ -n "$path" ] && [ -f "$path" ]; then
+            printf '%s\n' "$path"
+            return 0
+        fi
+    done
+    return 1
+}
 
 detect_default_accel() {
     os="$(uname -s)"
     arch="$(uname -m)"
-
     case "$os:$arch" in
-        Darwin:arm64|Darwin:aarch64)
-            printf 'hvf\n'
-            ;;
+        Darwin:arm64|Darwin:aarch64) printf 'hvf\n' ;;
         Linux:arm64|Linux:aarch64)
-            if [ -e /dev/kvm ]; then
-                printf 'kvm\n'
-            else
-                printf 'tcg\n'
-            fi
-            ;;
-        *)
-            printf 'tcg\n'
-            ;;
+            if [ -e /dev/kvm ]; then printf 'kvm\n'; else printf 'tcg\n'; fi ;;
+        *) printf 'tcg\n' ;;
     esac
 }
 
@@ -47,105 +68,257 @@ detect_default_display() {
     esac
 }
 
-QEMU_ACCEL="${QEMU_ACCEL:-$(detect_default_accel)}"
-QEMU_CPU="${QEMU_CPU:-}"
-if [ -z "$QEMU_CPU" ]; then
-    case "$QEMU_ACCEL" in
-        hvf|kvm)
-            QEMU_CPU="host"
-            ;;
-        *)
-            QEMU_CPU="max"
-            ;;
-    esac
-fi
-QEMU_DISPLAY="${QEMU_DISPLAY:-$(detect_default_display)}"
+# ── QEMU mode ────────────────────────────────────────────────────────────────
+if [ "$cmd" = qemu ]; then
+    QEMU_ACCEL="${QEMU_ACCEL:-$(detect_default_accel)}"
+    QEMU_CPU="${QEMU_CPU:-}"
+    if [ -z "$QEMU_CPU" ]; then
+        case "$QEMU_ACCEL" in
+            hvf|kvm) QEMU_CPU="host" ;;
+            *) QEMU_CPU="max" ;;
+        esac
+    fi
+    QEMU_DISPLAY="${QEMU_DISPLAY:-$(detect_default_display)}"
 
-find_file() {
-    for path in "$@"; do
-        if [ -n "$path" ] && [ -f "$path" ]; then
-            printf '%s\n' "$path"
-            return 0
-        fi
-    done
-    return 1
-}
+    brew_qemu_share=""
+    if command -v brew >/dev/null 2>&1; then
+        brew_qemu_share="$(brew --prefix qemu 2>/dev/null || true)/share/qemu"
+    fi
 
-brew_qemu_share=""
-if command -v brew >/dev/null 2>&1; then
-    brew_qemu_share="$(brew --prefix qemu 2>/dev/null || true)/share/qemu"
-fi
+    # try RPi UEFI firmware first, fall back to generic aarch64 UEFI
+    rpi_efi="$(find_file \
+        "${RPI_EFI_CODE:-}" \
+        "${QEMU_SHARE:-}/RPI_EFI.fd" \
+        "$brew_qemu_share/RPI_EFI.fd" \
+        "/opt/homebrew/share/qemu/RPI_EFI.fd" \
+        "/usr/local/share/qemu/RPI_EFI.fd" \
+        "/usr/share/qemu/RPI_EFI.fd" \
+        || true)"
 
-rpi_efi="$(find_file \
-    "${RPI_EFI_CODE:-}" \
-    "${QEMU_SHARE:-}/RPI_EFI.fd" \
-    "$brew_qemu_share/RPI_EFI.fd" \
-    "/opt/homebrew/share/qemu/RPI_EFI.fd" \
-    "/usr/local/share/qemu/RPI_EFI.fd" \
-    "/usr/share/qemu/RPI_EFI.fd" \
-    || true)"
+    if [ -n "$rpi_efi" ]; then
+        exec qemu-system-aarch64 \
+            -M raspi3b \
+            -accel "$QEMU_ACCEL" \
+            -cpu "$QEMU_CPU" \
+            -m 1024M \
+            -display "$QEMU_DISPLAY" \
+            -bios "$rpi_efi" \
+            -drive if=none,id=usbdisk,file=fat:rw:build/arm64/esp,format=raw \
+            -device usb-storage,drive=usbdisk \
+            -device usb-kbd \
+            -device usb-tablet \
+            -device usb-mouse \
+            -monitor none \
+            -no-reboot
+    fi
 
-if [ "$mode" = bios ]; then
-    if [ -z "$rpi_efi" ]; then
-        echo "RPI_EFI firmware not found. Set RPI_EFI_CODE=/path/to/RPI_EFI.fd and retry." >&2
+    aarch64_efi="$(find_file \
+        "${QEMU_EFI_CODE:-}" \
+        "${QEMU_SHARE:-}/edk2-aarch64-code.fd" \
+        "${QEMU_SHARE:-}/QEMU_EFI.fd" \
+        "${QEMU_SHARE:-}/AAVMF_CODE.fd" \
+        "$brew_qemu_share/edk2-aarch64-code.fd" \
+        "$brew_qemu_share/QEMU_EFI.fd" \
+        "$brew_qemu_share/AAVMF_CODE.fd" \
+        "/opt/homebrew/share/qemu/edk2-aarch64-code.fd" \
+        "/usr/local/share/qemu/edk2-aarch64-code.fd" \
+        "/usr/share/qemu/edk2-aarch64-code.fd" \
+        "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd" \
+        "/usr/share/AAVMF/AAVMF_CODE.fd" \
+        "/usr/share/AAVMF/AAVMF_CODE.ms.fd" \
+        "/usr/share/edk2/aarch64/QEMU_EFI.fd" \
+        "/usr/share/edk2/armvirt/QEMU_EFI.fd" \
+        "/usr/share/edk2/aarch64/AAVMF_CODE.fd" \
+        || true)"
+
+    if [ -z "$aarch64_efi" ]; then
+        echo "UEFI firmware not found. Set QEMU_EFI_CODE or RPI_EFI_CODE." >&2
         exit 1
     fi
 
     exec qemu-system-aarch64 \
-        -M raspi3b \
+        -M virt \
         -accel "$QEMU_ACCEL" \
         -cpu "$QEMU_CPU" \
-        -m 512M \
+        -smp 4 \
+        -m 1024M \
         -display "$QEMU_DISPLAY" \
-        -bios "$rpi_efi" \
-        -drive if=none,id=usbdisk,file=fat:rw:build/arm64/esp,format=raw \
-        -device usb-storage,drive=usbdisk \
+        -device virtio-gpu-pci,xres=1280,yres=720 \
+        -device qemu-xhci \
         -device usb-kbd \
         -device usb-tablet \
         -device usb-mouse \
+        -bios "$aarch64_efi" \
+        -drive if=none,id=hd0,file=fat:rw:build/arm64/esp,format=raw \
+        -device virtio-blk-device,drive=hd0 \
+        -net none \
         -monitor none \
         -no-reboot
 fi
 
-aarch64_efi="$(find_file \
-    "${QEMU_EFI_CODE:-}" \
-    "${QEMU_SHARE:-}/edk2-aarch64-code.fd" \
-    "${QEMU_SHARE:-}/QEMU_EFI.fd" \
-    "${QEMU_SHARE:-}/AAVMF_CODE.fd" \
-    "$brew_qemu_share/edk2-aarch64-code.fd" \
-    "$brew_qemu_share/QEMU_EFI.fd" \
-    "$brew_qemu_share/AAVMF_CODE.fd" \
-    "/opt/homebrew/share/qemu/edk2-aarch64-code.fd" \
-    "/usr/local/share/qemu/edk2-aarch64-code.fd" \
-    "/usr/share/qemu/edk2-aarch64-code.fd" \
-    "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd" \
-    "/usr/share/AAVMF/AAVMF_CODE.fd" \
-    "/usr/share/AAVMF/AAVMF_CODE.ms.fd" \
-    "/usr/share/edk2/aarch64/QEMU_EFI.fd" \
-    "/usr/share/edk2/armvirt/QEMU_EFI.fd" \
-    "/usr/share/edk2/aarch64/AAVMF_CODE.fd" \
-    || true)"
+# ── image mode: generate SD card image for Raspberry Pi 4 ────────────────────
 
-if [ -z "$aarch64_efi" ]; then
-    echo "UEFI firmware not found. Install aarch64 edk2 firmware or set QEMU_EFI_CODE/RPI_EFI_CODE." >&2
+IMAGE_SIZE_MB="${IMAGE_SIZE_MB:-128}"
+OUTPUT="build/rpi4/xiaoOS-rpi4.img"
+BOOT_DIR="build/rpi4/boot"
+
+rm -rf build/rpi4
+mkdir -p "$BOOT_DIR/EFI/BOOT"
+
+# copy EFI application
+cp build/arm64/esp/EFI/BOOT/BOOTAA64.EFI "$BOOT_DIR/EFI/BOOT/"
+
+# create RPi 4 config.txt
+cat > "$BOOT_DIR/config.txt" <<'CONF'
+# xiaoOS for Raspberry Pi 4
+arm_64bit=1
+gpu_mem=64
+enable_uart=1
+boot_delay=0
+
+# Load U-Boot as UEFI loader
+kernel=u-boot.bin
+CONF
+
+# ── locate U-Boot for RPi 4 ─────────────────────────────────────────────────
+# U-Boot provides UEFI compatibility via CONFIG_EFI_LOADER
+# Boot: bootcode4.bin -> start4.elf -> U-Boot -> UEFI -> BOOTAA64.EFI
+
+UBOOT_SEARCH_PATHS="
+    ${RPI_UBOOT_DIR:-}
+    tools/rpi4-uboot/bin
+    tools/rpi4-uboot/src
+    $HOME/u-boot
+    $HOME/rpi4-u-boot
+    /opt/u-boot
+    /usr/local/share/u-boot/u-boot-rpi4
+"
+
+uboot_found=0
+while IFS= read -r dir; do
+    dir="$(echo "$dir" | tr -d '[:space:]')"
+    [ -z "$dir" ] && continue
+    # U-Boot for RPi 4 can be u-boot.bin or u-boot.bin.lzma
+    for name in u-boot.bin u-boot.bin.lzma; do
+        if [ -f "$dir/$name" ]; then
+            cp "$dir/$name" "$BOOT_DIR/u-boot.bin"
+            uboot_found=1
+            break 2
+        fi
+    done
+done <<EOF
+$UBOOT_SEARCH_PATHS
+EOF
+
+if [ "$uboot_found" -eq 0 ]; then
+    echo "Error: U-Boot binary not found." >&2
+    echo "" >&2
+    echo "U-Boot is required for UEFI boot on Raspberry Pi 4." >&2
+    echo "" >&2
+    echo "Options:" >&2
+    echo "  1. Download prebuilt:" >&2
+    echo "     https://ftp.denx.de/pub/u-boot/" >&2
+    echo "     Or from your distro: apt install u-boot-rpi4 (Debian/Ubuntu)" >&2
+    echo "" >&2
+    echo "  2. Build from source:" >&2
+    echo "     git clone https://source.denx.de/u-boot/u-boot.git" >&2
+    echo "     cd u-boot" >&2
+    echo "     make rpi_4_defconfig" >&2
+    echo "     make -j\$(nproc)" >&2
+    echo "" >&2
+    echo "Required: u-boot.bin with UEFI support (CONFIG_EFI_LOADER=y)" >&2
+    echo "Set RPI_UBOOT_DIR=/path/to/u-boot and retry." >&2
     exit 1
 fi
 
-exec qemu-system-aarch64 \
-    -M virt \
-    -accel "$QEMU_ACCEL" \
-    -cpu "$QEMU_CPU" \
-    -smp 4 \
-    -m 512M \
-    -display "$QEMU_DISPLAY" \
-    -device virtio-gpu-pci,xres=1280,yres=720 \
-    -device qemu-xhci \
-    -device usb-kbd \
-    -device usb-tablet \
-    -device usb-mouse \
-    -bios "$aarch64_efi" \
-    -drive if=none,id=hd0,file=fat:rw:build/arm64/esp,format=raw \
-    -device virtio-blk-device,drive=hd0 \
-    -net none \
-    -monitor none \
-    -no-reboot
+# ── locate standard RPi firmware (start4.elf, fixup4.dat, bootcode.bin) ────
+FW_SEARCH_PATHS="
+    ${RPI_FIRMWARE_DIR:-}
+    tools/rpi4-firmware
+    /boot
+    /boot/firmware
+    /Volumes/boot
+    $HOME/rpi-firmware/boot
+    $HOME/firmware/boot
+"
+
+# RPi 4 uses bootcode.bin (not bootcode4.bin)
+RPi4_FW="start4.elf fixup4.dat bootcode.bin"
+
+for fw in $RPi4_FW; do
+    [ -f "$BOOT_DIR/$fw" ] && continue
+    while IFS= read -r dir; do
+        dir="$(echo "$dir" | tr -d '[:space:]')"
+        [ -z "$dir" ] && continue
+        if [ -f "$dir/$fw" ]; then
+            cp "$dir/$fw" "$BOOT_DIR/"
+            break
+        fi
+    done <<EOF
+$FW_SEARCH_PATHS
+EOF
+done
+
+# also accept bootcode4.bin as alternative name
+if [ ! -f "$BOOT_DIR/bootcode.bin" ] && [ -f "$BOOT_DIR/bootcode4.bin" ]; then
+    cp "$BOOT_DIR/bootcode4.bin" "$BOOT_DIR/bootcode.bin"
+fi
+
+# verify all required files are present
+echo "Boot partition contents:"
+missing=0
+for f in u-boot.bin start4.elf fixup4.dat bootcode.bin config.txt; do
+    if [ -f "$BOOT_DIR/$f" ]; then
+        echo "  $f ($(wc -c < "$BOOT_DIR/$f") bytes)"
+    else
+        echo "  $f MISSING" >&2
+        missing=1
+    fi
+done
+echo "  EFI/BOOT/BOOTAA64.EFI ($(wc -c < "$BOOT_DIR/EFI/BOOT/BOOTAA64.EFI") bytes)"
+
+if [ "$missing" -eq 1 ]; then
+    echo "" >&2
+    echo "Missing required firmware files. Set RPI_FIRMWARE_DIR and retry." >&2
+    exit 1
+fi
+
+# ── create FAT32 image ──────────────────────────────────────────────────────
+require_tool() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "Required tool not found: $1" >&2
+        case "$(uname -s)" in
+            Darwin) echo "Install via: brew install $2" >&2 ;;
+            Linux)  echo "Install via: sudo apt install $2" >&2 ;;
+        esac
+        exit 1
+    }
+}
+
+require_tool mkfs.fat dosfstools
+require_tool mcopy mtools
+
+SECTORS=$((IMAGE_SIZE_MB * 1024 * 2))
+mkdir -p "$(dirname "$OUTPUT")"
+dd if=/dev/zero of="$OUTPUT" bs=512 count="$SECTORS" 2>/dev/null
+mkfs.fat -F 32 -n XIAO_OS "$OUTPUT" >/dev/null
+
+# copy all files recursively into the image
+mcopy -s -i "$OUTPUT" "$BOOT_DIR"/bootcode.bin ::/
+mcopy -s -i "$OUTPUT" "$BOOT_DIR"/config.txt ::/
+mcopy -s -i "$OUTPUT" "$BOOT_DIR"/start4.elf ::/
+mcopy -s -i "$OUTPUT" "$BOOT_DIR"/fixup4.dat ::/
+mcopy -s -i "$OUTPUT" "$BOOT_DIR"/u-boot.bin ::/
+mcopy -s -i "$OUTPUT" "$BOOT_DIR/EFI" ::/EFI
+
+echo ""
+echo "Image created: $OUTPUT"
+echo "Size: ${IMAGE_SIZE_MB}MB"
+echo ""
+echo "Boot chain: bootcode4.bin -> start4.elf -> u-boot.bin -> UEFI -> BOOTAA64.EFI"
+echo ""
+echo "To flash to SD card:"
+echo "  sudo dd if=$OUTPUT of=/dev/sdX bs=4M status=progress && sync"
+echo ""
+echo "To test in QEMU:"
+echo "  ./rp.sh qemu"

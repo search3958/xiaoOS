@@ -27,34 +27,44 @@ PCではBIOS boot sectorまたはUEFI applicationが同じ `xiao_start()` を呼
 - `./64.sh`: x86_64 UEFI。QEMU画面にOS出力します。
 - `./arm.sh`: AArch64 UEFI。QEMU virt向けにUSB/virtio keyboardを明示しています。
 - `./rp.sh image`: Raspberry Pi 4向けのブータブルSDカードイメージを生成します。
-- `./rp.sh qemu`: QEMU raspi3bエミュレータで起動します。
+- `./rp.sh qemu`: QEMU raspi4bエミュレータで起動します。
 
 ## Raspberry Pi 4
 Raspberry Pi 4で動作させるにはUEFI対応ブートローダーが必要です。
 
 ### ブートチェーン
 ```
-bootcode4.bin -> start4.elf -> u-boot.bin -> UEFI -> BOOTAA64.EFI
+EEPROM -> start4.elf -> kernel8.img (U-Boot) -> UEFI -> BOOTAA64.EFI
 ```
 
 U-BootがUEFI互換を提供します (`CONFIG_EFI_LOADER`)。
 
 ### 必要なファームウェア
-- `u-boot.bin` — U-Boot (UEFI対応ビルド)
+- `kernel8.img` — U-Boot (UEFI対応ビルド、RPi 4はkernel8.imgとして配置)
 - `start4.elf` — 標準RPi GPUファームウェア
 - `fixup4.dat` — GPUファームウェアコンパニオン
-- `bootcode4.bin` — RPiブートローダー (SPI EEPROMにも格納済み)
 
 ### 取得先
-- U-Boot: https://ftp.denx.de/pub/u-boot/ または `apt install u-boot-rpi4`
-- ビルド: `make rpi_4_defconfig && make`
+- U-Boot: `git clone https://source.denx.de/u-boot/u-boot.git && make rpi_4_defconfig && make`
 - RPi firmware: https://github.com/raspberrypi/firmware/tree/master/boot
+
+### 前提条件: EEPROM更新
+**USBブートには最新のEEPROMが必要です。** 古いEEPROMではUSBから起動しません。
+```sh
+# 別のRPi 4から実行
+sudo rpi-eeprom-update -a
+sudo reboot
+```
+またはRaspberry Pi ImagerでEEPROMを更新。
 
 ### イメージ生成
 ```sh
-# U-Bootをダウンロード・ビルド後
-RPI_UBOOT_DIR=/path/to/u-boot RPI_FIRMWARE_DIR=/path/to/rpi-firmware/boot ./rp.sh image
+# 自動的にU-BootとRPiファームウェアを探してイメージ生成
+./rp.sh image
 
-# SDカードに書き込み
+# SDカード/USBに書き込み
 sudo dd if=build/rpi4/xiaoOS-rpi4.img of=/dev/sdX bs=4M status=progress && sync
+
+# QEMUで起動確認
+./rp.sh qemu
 ```
